@@ -91,6 +91,38 @@ print(f"=" * 80)
 # =============================================================================
 # 第二部分：套件安裝與載入
 # =============================================================================
+def clear_finlab_cache():
+    """清除可能損壞的 FinLab 快取（必須在載入 FinLab 之前執行）"""
+    import glob
+    import shutil
+
+    cache_patterns = [
+        '/root/.finlab*',
+        '/tmp/.finlab*',
+        '/tmp/finlab*',
+        os.path.expanduser('~/.finlab*'),
+        '/content/.finlab*',
+    ]
+
+    cleared = 0
+    for pattern in cache_patterns:
+        try:
+            matches = glob.glob(pattern)
+            for path in matches:
+                if os.path.isdir(path):
+                    shutil.rmtree(path)
+                else:
+                    os.remove(path)
+                cleared += 1
+        except:
+            pass
+
+    if cleared > 0:
+        print(f"🔧 已清除 {cleared} 個快取檔案")
+
+# 🔥 在載入 FinLab 之前先清除快取
+clear_finlab_cache()
+
 def install_packages():
     """安裝必要套件"""
     required = {
@@ -197,34 +229,8 @@ class FinLabDataLoader:
         if not self._cache:
             self._load_all_data()
 
-    def _clear_finlab_cache(self):
-        """清除可能損壞的 FinLab 快取"""
-        import glob
-        import shutil
-
-        cache_patterns = [
-            '/root/.finlab*',
-            '/tmp/.finlab*',
-            '/tmp/finlab*',
-            os.path.expanduser('~/.finlab*'),
-        ]
-
-        for pattern in cache_patterns:
-            try:
-                matches = glob.glob(pattern)
-                for path in matches:
-                    if os.path.isdir(path):
-                        shutil.rmtree(path)
-                    else:
-                        os.remove(path)
-            except:
-                pass  # 忽略刪除失敗
-
     def _load_all_data(self):
         """載入所有數據"""
-        # 🔥 清除可能損壞的 FinLab 快取
-        self._clear_finlab_cache()
-
         print("📊 載入 FinLab 數據...")
         start_time = time.time()
 
