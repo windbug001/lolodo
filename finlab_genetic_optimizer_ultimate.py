@@ -135,6 +135,9 @@ def setup_environment():
         in_colab = False
         print("⚠️ 本地環境")
 
+    # 🔥 禁用 FinLab 快取以避免損壞的快取檔案
+    os.environ['FINLAB_DISABLE_CACHE'] = '1'
+
     # FinLab 登入
     finlab.login(FINLAB_API_KEY)
     print("✅ FinLab VIP 登入成功")
@@ -194,8 +197,34 @@ class FinLabDataLoader:
         if not self._cache:
             self._load_all_data()
 
+    def _clear_finlab_cache(self):
+        """清除可能損壞的 FinLab 快取"""
+        import glob
+        import shutil
+
+        cache_patterns = [
+            '/root/.finlab*',
+            '/tmp/.finlab*',
+            '/tmp/finlab*',
+            os.path.expanduser('~/.finlab*'),
+        ]
+
+        for pattern in cache_patterns:
+            try:
+                matches = glob.glob(pattern)
+                for path in matches:
+                    if os.path.isdir(path):
+                        shutil.rmtree(path)
+                    else:
+                        os.remove(path)
+            except:
+                pass  # 忽略刪除失敗
+
     def _load_all_data(self):
         """載入所有數據"""
+        # 🔥 清除可能損壞的 FinLab 快取
+        self._clear_finlab_cache()
+
         print("📊 載入 FinLab 數據...")
         start_time = time.time()
 
