@@ -30,6 +30,10 @@ FinLab Taiwan Stock Genetic Algorithm Optimizer - Ultimate Edition
 ================================================================================
 """
 
+# 🔥 【重要】在 import 任何套件之前，先禁用 FinLab 快取以避免 EOFError
+import os
+os.environ['FINLAB_DISABLE_CACHE'] = '1'
+
 from __future__ import annotations
 
 import warnings
@@ -39,7 +43,6 @@ warnings.filterwarnings("ignore", category=FutureWarning)
 # =============================================================================
 # 第一部分：核心設定
 # =============================================================================
-import os
 import sys
 import json
 import pickle
@@ -166,9 +169,6 @@ def setup_environment():
         base_dir = './finlab_ga_output'
         in_colab = False
         print("⚠️ 本地環境")
-
-    # 🔥 禁用 FinLab 快取以避免損壞的快取檔案
-    os.environ['FINLAB_DISABLE_CACHE'] = '1'
 
     # FinLab 登入
     finlab.login(FINLAB_API_KEY)
