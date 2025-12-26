@@ -293,8 +293,8 @@ class FinLabDataLoader:
         # 股東權益報酬率
         self._cache['股東權益報酬率'] = self._cache['稅後淨利'] / self._cache['權益總計']
 
-        # 當季營收
-        當月營收 = data.get('monthly_revenue:當月營收') * 1000
+        # 當季營收（使用已載入的營收數據）
+        當月營收 = self._cache['rev'] * 1000
         self._cache['當季營收'] = 當月營收.rolling(4).sum()
         self._cache['市值營收比'] = self._cache['市值'] / self._cache['當季營收']
 
