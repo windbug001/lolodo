@@ -107,7 +107,6 @@ install_packages()
 import finlab
 from finlab import data
 from finlab.backtest import sim
-from finlab.online.enums import OrderType, TradingUnit, Action
 
 from deap import base, creator, tools, algorithms
 from joblib import Parallel, delayed
