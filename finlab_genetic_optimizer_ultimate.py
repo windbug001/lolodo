@@ -59,6 +59,7 @@ pd.set_option('display.max_columns', None)
 pd.set_option('future.no_silent_downcasting', True)
 
 # === 🔥 核心設定（請修改）===
+WINDOW_ID = 1  # 🔥 視窗 ID (1-4)，多視窗執行時請修改此值
 FINLAB_API_KEY = "R5XcZHGBZgEO5zz+6e1iYAe3wcFiimTUNaCMKsnZEiM42Wp49xW46MySUZT1W/Ee#vip_m"
 
 # 優化目標
@@ -83,7 +84,7 @@ BACKTEST_START = '2017-01-01'
 BACKTEST_END = None
 
 print(f"=" * 80)
-print(f"🚀 FinLab 台股基因演算法優化系統 v1.0")
+print(f"🚀 FinLab 台股基因演算法優化系統 v1.0 - 視窗 {WINDOW_ID}")
 print(f"   🎯 目標：夏普 >= {TARGET_SHARPE}, 胃納量 >= {MIN_CAPACITY/1e7:.0f}00萬")
 print(f"=" * 80)
 
@@ -146,22 +147,31 @@ BASE_DIR, IN_COLAB = setup_environment()
 class PathManager:
     """路徑管理器"""
     base_dir: str = BASE_DIR
+    window_id: int = WINDOW_ID
 
     def __post_init__(self):
-        self.output_dir = f"{self.base_dir}/output"
-        self.pareto_dir = f"{self.base_dir}/pareto_archive"
-        self.history_dir = f"{self.base_dir}/history"
+        # 每個視窗有獨立的輸出目錄
+        self.window_dir = f"{self.base_dir}/window_{self.window_id}"
+        self.output_dir = f"{self.window_dir}/output"
+        self.pareto_dir = f"{self.base_dir}/shared_pareto"  # Pareto Archive 共享
+        self.history_dir = f"{self.window_dir}/history"
+        self.log_dir = f"{self.window_dir}_logs"  # 🔥 日誌目錄（供監控器讀取）
 
-        for d in [self.output_dir, self.pareto_dir, self.history_dir]:
+        for d in [self.window_dir, self.output_dir, self.pareto_dir,
+                  self.history_dir, self.log_dir]:
             Path(d).mkdir(parents=True, exist_ok=True)
 
     @property
     def pareto_archive(self) -> str:
-        return f"{self.pareto_dir}/pareto_archive.pkl"
+        return f"{self.pareto_dir}/pareto_archive_w{self.window_id}.pkl"
 
     @property
     def best_params_file(self) -> str:
-        return f"{self.output_dir}/best_params.json"
+        return f"{self.output_dir}/best_params_w{self.window_id}.json"
+
+    @property
+    def progress_log(self) -> str:
+        return f"{self.log_dir}/progress_history.json"
 
 paths = PathManager()
 print(f"📁 工作目錄: {paths.output_dir}")
@@ -1037,6 +1047,48 @@ pareto_archive = ParetoArchiveManager(paths.pareto_archive)
 # =============================================================================
 # 第十一部分：演化引擎
 # =============================================================================
+class ProgressLogger:
+    """進度日誌記錄器（用於監控系統）"""
+
+    def __init__(self, window_id: int, base_dir: str = BASE_DIR):
+        self.window_id = window_id
+        self.log_dir = f"{base_dir}/window_{window_id}_logs"
+        self.history_file = f"{self.log_dir}/progress_history.json"
+        Path(self.log_dir).mkdir(parents=True, exist_ok=True)
+        self.start_time = time.time()
+
+    def log_generation(self, gen: int, total_gen: int, stats: Dict):
+        """記錄單代進度"""
+        progress = {
+            'timestamp': datetime.now().isoformat(),
+            'window_id': self.window_id,
+            'current_gen': gen + 1,  # 輸出為 1-based
+            'total_gen': total_gen,
+            'best_sharpe': stats.get('best_sharpe', 0),
+            'best_capacity': stats.get('best_capacity', 0),
+            'best_composite': stats.get('best_composite', 0),
+            'best_return': stats.get('best_return', 0),
+            'robustness': stats.get('best_robustness', 0),
+            'elapsed_total': time.time() - self.start_time,
+        }
+
+        # 讀取歷史
+        history = []
+        if os.path.exists(self.history_file):
+            try:
+                with open(self.history_file, 'r', encoding='utf-8') as f:
+                    history = json.load(f)
+            except:
+                pass
+
+        # 添加新記錄
+        history.append(progress)
+
+        # 保存
+        with open(self.history_file, 'w', encoding='utf-8') as f:
+            json.dump(history, f, indent=2, ensure_ascii=False)
+
+
 class EvolutionEngine:
     """演化引擎"""
 
@@ -1044,6 +1096,7 @@ class EvolutionEngine:
         self.toolbox = toolbox
         self.pareto_mgr = pareto_mgr
         self.history = []
+        self.logger = ProgressLogger(WINDOW_ID)  # 🔥 初始化進度日誌記錄器
 
     def run(self, n_generations: int = N_GENERATIONS) -> Tuple[List, List]:
         """執行演化"""
@@ -1144,7 +1197,7 @@ class EvolutionEngine:
 
         composites = [sum(f) for f in fitnesses]
 
-        return {
+        stats = {
             'generation': gen,
             'best_composite': max(composites),
             'avg_composite': np.mean(composites),
@@ -1153,6 +1206,11 @@ class EvolutionEngine:
             'best_return': max(returns),
             'best_robustness': max(robustness),
         }
+
+        # 🔥 記錄進度供監控系統使用
+        self.logger.log_generation(gen, N_GENERATIONS, stats)
+
+        return stats
 
     def _print_pareto_front(self, pareto_front: List):
         """輸出 Pareto 前緣"""
