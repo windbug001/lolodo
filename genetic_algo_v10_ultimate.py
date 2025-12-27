@@ -32,10 +32,62 @@ import warnings
 warnings.filterwarnings('ignore')
 
 # =============================================================================
-# 第一部分：核心設定
+# 第零部分：套件相容性檢查（必須在 numpy 導入前執行）
 # =============================================================================
 import os
 import sys
+import subprocess
+
+def _ensure_package_compatibility():
+    """確保套件相容性，必須在導入 numpy/sklearn 之前執行"""
+    needs_restart = False
+
+    # 檢查必要套件
+    required_simple = ['finlab', 'deap', 'joblib']
+    for pkg in required_simple:
+        try:
+            __import__(pkg)
+        except ImportError:
+            print(f"   安裝 {pkg}...")
+            subprocess.run([sys.executable, '-m', 'pip', 'install', pkg, '-q'],
+                         capture_output=True)
+            needs_restart = True
+
+    # 測試 sklearn 相容性（用子進程避免污染當前環境）
+    test_code = '''
+import sys
+try:
+    from sklearn.model_selection import TimeSeriesSplit
+    sys.exit(0)
+except:
+    sys.exit(1)
+'''
+    result = subprocess.run([sys.executable, '-c', test_code], capture_output=True)
+    if result.returncode != 0:
+        print("   修復 sklearn/numpy 相容性問題...")
+        subprocess.run([sys.executable, '-m', 'pip', 'install', '--upgrade',
+                       'numpy<2.0', 'scikit-learn', '-q'], capture_output=True)
+        needs_restart = True
+
+    if needs_restart:
+        try:
+            import google.colab
+            print("\n" + "=" * 60)
+            print("⚠️  套件已更新！請執行以下步驟：")
+            print("   1. 點選上方選單 Runtime -> Restart runtime")
+            print("   2. 重新執行此 cell")
+            print("=" * 60 + "\n")
+            # 嘗試自動重啟
+            from google.colab import runtime
+            runtime.unassign()
+        except:
+            pass
+
+_ensure_package_compatibility()
+
+# =============================================================================
+# 第一部分：核心設定
+# =============================================================================
 import json
 import pickle
 import time
@@ -85,27 +137,9 @@ print(f"   📊 持股要求：每隻至少 {MIN_POSITION_WEIGHT*100:.0f}%, 步�
 print(f"=" * 80)
 
 # =============================================================================
-# 第二部分：套件安裝
+# 第二部分：套件載入
 # =============================================================================
-def install_packages():
-    """安裝必要套件"""
-    required = {
-        'finlab': 'finlab',
-        'deap': 'deap',
-        'joblib': 'joblib',
-        'scikit-learn': 'sklearn',
-    }
-
-    for pkg_name, import_name in required.items():
-        try:
-            __import__(import_name)
-        except ImportError:
-            print(f"   安裝 {pkg_name}...")
-            os.system(f'pip install {pkg_name} -q')
-
-install_packages()
-
-# 載入套件
+# 載入套件（相容性已在第零部分處理）
 import finlab
 from finlab import data
 from finlab.backtest import sim
@@ -1141,7 +1175,48 @@ class ParetoArchiveManager:
 pareto_archive = ParetoArchiveManager(paths.pareto_archive)
 
 # =============================================================================
-# 第十三部分：演化引擎（整合歷史最佳）
+# 第十三部分：進度日誌記錄器
+# =============================================================================
+class ProgressLogger:
+    """進度日誌記錄器（用於監控系統）"""
+
+    def __init__(self, window_id: int, base_dir: str = BASE_DIR):
+        self.window_id = window_id
+        self.log_dir = f"{base_dir}/window_{window_id}_logs"
+        self.history_file = f"{self.log_dir}/progress_history.json"
+        Path(self.log_dir).mkdir(parents=True, exist_ok=True)
+        self.start_time = time.time()
+
+    def log_generation(self, gen: int, total_gen: int, stats: Dict):
+        """記錄單代進度"""
+        progress = {
+            'timestamp': datetime.now().isoformat(),
+            'window_id': self.window_id,
+            'current_gen': gen + 1,
+            'total_gen': total_gen,
+            'best_sharpe': stats.get('best_sharpe', 0),
+            'best_capacity': stats.get('best_capacity', 0),
+            'best_composite': stats.get('best_composite', 0),
+            'best_return': stats.get('best_return', 0),
+            'robustness': stats.get('best_robustness', 0),
+            'elapsed_total': time.time() - self.start_time,
+        }
+
+        history = []
+        if os.path.exists(self.history_file):
+            try:
+                with open(self.history_file, 'r', encoding='utf-8') as f:
+                    history = json.load(f)
+            except:
+                pass
+
+        history.append(progress)
+
+        with open(self.history_file, 'w', encoding='utf-8') as f:
+            json.dump(history, f, indent=2, ensure_ascii=False)
+
+# =============================================================================
+# 第十四部分：演化引擎（整合歷史最佳）
 # =============================================================================
 class UltimateEvolutionEngine:
     """終極演化引擎"""
@@ -1150,6 +1225,7 @@ class UltimateEvolutionEngine:
         self.toolbox = toolbox
         self.pareto_mgr = pareto_mgr
         self.history = []
+        self.logger = ProgressLogger(WINDOW_ID)  # 🔥 初始化進度日誌記錄器
 
     def run(self, n_generations: int = N_GENERATIONS) -> Tuple[List, List]:
         """執行演化"""
@@ -1201,13 +1277,17 @@ class UltimateEvolutionEngine:
             elapsed = time.time() - start_time
 
             # 輸出
-            if (gen + 1) % 5 == 0:
+            if (gen + 1) % 5 == 0 or gen == 0:
                 print(f"=== 第 {gen+1}/{n_generations} 代 ===")
                 print(f"   最佳綜合: {stats['best_composite']:.4f}")
                 print(f"   最佳夏普: {stats['best_sharpe']:.2f}")
                 print(f"   最佳胃納量: {stats['best_capacity']:.0f} 萬")
                 print(f"   穩健性: {stats['best_robustness']:.2f}")
                 print(f"   耗時: {elapsed:.1f}s")
+
+            # 🔥 每10代執行一次完整回測並顯示圖表
+            if (gen + 1) % 10 == 0:
+                self._run_checkpoint_backtest(population, gen + 1)
 
             # 檢查點
             if (gen + 1) % 20 == 0:
@@ -1254,7 +1334,7 @@ class UltimateEvolutionEngine:
 
         composites = [sum(f) for f in fitnesses]
 
-        return {
+        stats = {
             'generation': gen,
             'best_composite': max(composites),
             'avg_composite': np.mean(composites),
@@ -1263,6 +1343,11 @@ class UltimateEvolutionEngine:
             'best_return': max(returns),
             'best_robustness': max(robustness),
         }
+
+        # 🔥 記錄進度供監控系統使用
+        self.logger.log_generation(gen, N_GENERATIONS, stats)
+
+        return stats
 
     def _save_checkpoint(self, population: List, gen: int):
         """保存檢查點"""
@@ -1277,6 +1362,81 @@ class UltimateEvolutionEngine:
                 }, f)
         except Exception as e:
             print(f"⚠️ 檢查點保存失敗: {e}")
+
+    def _run_checkpoint_backtest(self, population: List, gen: int):
+        """
+        🔥 每10代執行一次完整回測並顯示 FinLab 圖表
+
+        Args:
+            population: 當前族群
+            gen: 當前世代數
+        """
+        print(f"\n{'='*70}")
+        print(f"📊 第 {gen} 代 - 完整回測報告")
+        print(f"{'='*70}")
+
+        try:
+            # 找出當前最佳個體
+            best_ind = max(population, key=lambda x: sum(x.fitness.values))
+            best_params = gene_decoder.decode(best_ind)
+
+            # 顯示當前最佳權重
+            print(f"\n🎯 當前最佳參數:")
+            weights = best_params.get('strategy_weights', {})
+            print(f"   策略權重: {weights}")
+            print(f"   停損: {best_params.get('stop_loss', 0.25):.1%} | "
+                  f"移動停利: {best_params.get('trail_stop', 0.35):.1%} | "
+                  f"停利: {best_params.get('take_profit', 0.7):.1%}")
+
+            # 組合策略
+            position = strategy_engine.combine_strategies(best_params)
+
+            if position is None or position.empty:
+                print("   ⚠️ 策略產生空持股，跳過回測")
+                return
+
+            # 執行完整回測並上傳顯示圖表
+            report = sim(
+                position=position,
+                fee_ratio=1.425/1000,
+                tax_ratio=3/1000,
+                trade_at_price="high_low_avg",
+                position_limit=best_params.get('position_limit', 0.35),
+                stop_loss=best_params.get('stop_loss', 0.25),
+                trail_stop=best_params.get('trail_stop', 0.35),
+                take_profit=best_params.get('take_profit', 0.7),
+                stop_trading_next_period=False,
+                upload=True,  # 🔥 上傳以顯示完整圖表
+                name=f'GA_V10_W{WINDOW_ID}_Gen{gen}'
+            )
+
+            # 顯示完整報告（包含圖表）
+            print(f"\n📈 回測結果:")
+            report.display()
+
+            # 取得指標
+            metrics = report.get_metrics()
+            sharpe = metrics['ratio'].get('sharpeRatio', 0) or 0
+            capacity = metrics['liquidity'].get('capacity', 0) or 0
+            annual_return = metrics['profitability'].get('annualReturn', 0) or 0
+
+            print(f"\n🎯 關鍵指標:")
+            print(f"   夏普值: {sharpe:.2f}" + (" ✅ 達標!" if sharpe >= 4.0 else f" (目標 4.0, 差 {4.0-sharpe:.2f})"))
+            print(f"   胃納量: {capacity/1e4:.0f} 萬" + (" ✅ 達標!" if capacity >= MIN_CAPACITY else f" (目標 {MIN_CAPACITY/1e4:.0f}萬)"))
+            print(f"   年化報酬: {annual_return:.1%}")
+
+            # 保存當前最佳參數
+            checkpoint_file = f"{paths.output_dir}/checkpoint_gen{gen}_params.json"
+            with open(checkpoint_file, 'w') as f:
+                json.dump(best_params, f, indent=2, default=str)
+            print(f"\n💾 參數已保存: {checkpoint_file}")
+
+        except Exception as e:
+            print(f"   ⚠️ 檢查點回測失敗: {e}")
+            import traceback
+            traceback.print_exc()
+
+        print(f"{'='*70}\n")
 
     def _print_pareto_front(self, pareto_front: List):
         """輸出 Pareto 前緣"""
