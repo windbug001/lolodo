@@ -18,7 +18,7 @@
 # 🔑 FinLab VIP 登入
 # ============================================================================
 from finlab import login
-login.login(api_token='R5XcZHGBZgEO5zz+6e1iYAe3wcFiimTUNaCMKsnZEiM42Wp49xW46MySUZT1W/Ee#vip_m')
+login('R5XcZHGBZgEO5zz+6e1iYAe3wcFiimTUNaCMKsnZEiM42Wp49xW46MySUZT1W/Ee#vip_m')
 
 from finlab import data
 from finlab.backtest import sim
