@@ -30,11 +30,11 @@ FinLab Taiwan Stock Genetic Algorithm Optimizer - Ultimate Edition
 ================================================================================
 """
 
-# 🔥 【重要】在 import 任何套件之前，先禁用 FinLab 快取以避免 EOFError
+from __future__ import annotations
+
+# 🔥 【重要】在 import 其他套件之前，先禁用 FinLab 快取以避免 EOFError
 import os
 os.environ['FINLAB_DISABLE_CACHE'] = '1'
-
-from __future__ import annotations
 
 import warnings
 warnings.filterwarnings('ignore')
