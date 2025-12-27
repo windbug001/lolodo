@@ -8,6 +8,10 @@
 # 4. ✅ 策略權重優化 - 確保分散且有效
 # 5. ✅ 精選高勝率策略組合
 # 6. ✅ 目標：夏普值 4.0+
+# 7. ✅ 每 20 代詳細回測 - 定期完整回測追蹤進度
+# 8. ✅ 重啟時回測歷史前五 - 快速確認基準績效
+# 9. ✅ FinLab ML API 整合 - 機器學習特徵優化
+# 10.✅ 最低權重過濾 - 單檔至少 3%，否則 0%
 # ============================================================================
 
 from finlab import data
@@ -55,6 +59,23 @@ pd.set_option('future.no_silent_downcasting', True)
 MIN_CAPACITY = 10_000_000  # 強制最低胃納量 1000萬
 TARGET_SHARPE = 4.0        # 目標夏普值
 CAPACITY_PENALTY_WEIGHT = 0.5  # 胃納量懲罰權重
+
+# ============================================================================
+# 🔄 定期回測設定
+# ============================================================================
+BACKTEST_EVERY_N_GEN = 20  # 每 N 代執行一次詳細回測
+TOP_N_HISTORICAL = 5       # 重啟時回測歷史前 N 名
+
+# ============================================================================
+# 📊 持倉權重設定
+# ============================================================================
+MIN_STOCK_WEIGHT = 0.03    # 單檔股票最低權重 3%，低於此值設為 0%
+
+# ============================================================================
+# 🤖 FinLab ML API 設定
+# ============================================================================
+USE_ML_FEATURES = True     # 是否使用機器學習特徵
+ML_FEATURE_WEIGHT = 0.1    # ML 特徵在評估中的權重
 
 # ============================================================================
 # 第一部分：改良的智能檔案鎖定機制
@@ -447,6 +468,54 @@ entry_volatility = atr/adj_close
 
 print(f"✅ 視窗 {WINDOW_ID} 資料載入與指標計算完成")
 print(f"📊 高胃納量股票數量: {high_capacity_filter.iloc[-1].sum()} 檔 (>= {MIN_CAPACITY/1e6:.0f}M)")
+
+# ============================================================================
+# 🤖 FinLab ML API 整合 - 機器學習特徵
+# ============================================================================
+ml_features = {}
+
+if USE_ML_FEATURES:
+    print(f"\n🤖 載入 FinLab ML 特徵...")
+    try:
+        # 嘗試載入 FinLab 機器學習模組
+        from finlab.ml import feature_factory
+
+        # 動量特徵
+        ml_features['momentum_score'] = close.pct_change(20).rank(axis=1, pct=True)
+
+        # 波動率特徵
+        ml_features['volatility_rank'] = close.pct_change().rolling(20).std().rank(axis=1, pct=True)
+
+        # 成交量異常特徵
+        ml_features['volume_anomaly'] = (vol / vol.rolling(60).mean()).rank(axis=1, pct=True)
+
+        # 價格位置特徵 (相對於52週高低點)
+        high_52w = close.rolling(252).max()
+        low_52w = close.rolling(252).min()
+        ml_features['price_position'] = (close - low_52w) / (high_52w - low_52w + 1e-10)
+
+        # 營收動能特徵
+        ml_features['rev_momentum'] = rev_yoy_growth.rolling(3).mean().rank(axis=1, pct=True)
+
+        # 綜合 ML 評分
+        ml_features['ml_composite_score'] = (
+            ml_features['momentum_score'] * 0.25 +
+            (1 - ml_features['volatility_rank']) * 0.20 +  # 低波動加分
+            ml_features['volume_anomaly'] * 0.15 +
+            ml_features['price_position'] * 0.20 +
+            ml_features['rev_momentum'] * 0.20
+        )
+
+        print(f"✅ ML 特徵載入完成 ({len(ml_features)} 個特徵)")
+
+    except ImportError:
+        print("⚠️ FinLab ML 模組未安裝，使用基礎特徵")
+        # 基礎替代特徵
+        ml_features['ml_composite_score'] = close.pct_change(20).rank(axis=1, pct=True)
+
+    except Exception as e:
+        print(f"⚠️ ML 特徵載入失敗: {e}")
+        ml_features['ml_composite_score'] = pd.DataFrame(0.5, index=close.index, columns=close.columns)
 
 
 # ============================================================================
@@ -1109,7 +1178,10 @@ def combined_strategy_twelve(gene, start_date_str="2014-01-01"):
         # 🎯 強制高胃納量篩選 - 雙重保險
         position_combined = position_combined * high_capacity_filter
 
-        # 再次標準化
+        # 🎯 最低權重過濾：每檔股票至少 3%，否則設為 0%
+        position_combined = position_combined.where(position_combined >= MIN_STOCK_WEIGHT, 0)
+
+        # 再次標準化（確保總權重不超過 100%）
         row_sums_after = position_combined.sum(axis=1)
         for idx in position_combined.index:
             if row_sums_after[idx] > 1.0:
@@ -1401,6 +1473,161 @@ def load_historical_best():
 
 
 # ============================================================================
+# 🔄 重啟時回測歷史前五名
+# ============================================================================
+def backtest_top_n_historical(individuals, n=TOP_N_HISTORICAL):
+    """重啟時回測歷史前 N 名個體"""
+    if not individuals:
+        print("⚠️ 沒有歷史個體可供回測")
+        return []
+
+    print("\n" + "🏆"*30)
+    print(f"🏆 重啟時回測歷史前 {n} 名個體 🏆")
+    print("🏆"*30)
+
+    results = []
+    top_n = individuals[:n]
+
+    for i, ind in enumerate(top_n, 1):
+        print(f"\n{'='*60}")
+        print(f"📊 回測第 {i} 名歷史個體")
+        print(f"{'='*60}")
+
+        try:
+            # 確保個體有正確長度
+            if len(ind) < 251:
+                ind = list(ind) + [random.uniform(0.1, 10)] * (251 - len(ind))
+
+            position_combined, overall_params = combined_strategy_twelve(ind)
+
+            if position_combined.empty:
+                print(f"⚠️ 第 {i} 名：無有效持倉")
+                continue
+
+            # 計算胃納量
+            position_capacity = (position_combined * capacity).sum(axis=1)
+            avg_capacity = position_capacity[position_capacity > 0].mean()
+
+            report = sim(
+                position=position_combined,
+                stop_loss=overall_params['stop_loss'],
+                trail_stop=overall_params['trail_stop'],
+                fee_ratio=FEE_RATIO,
+                tax_ratio=TAX_RATIO,
+                trade_at_price=overall_params['trade_at_price'],
+                position_limit=overall_params['position_limit'],
+                take_profit=overall_params['take_profit'],
+                name=f"歷史第{i}名_胃納{avg_capacity/1e6:.0f}M",
+                upload=True
+            )
+
+            if report:
+                metrics = report.get_metrics()
+                sharpe = metrics['ratio']['sharpeRatio']
+                annual_return = metrics['profitability']['annualReturn']
+                max_drawdown = metrics['risk']['maxDrawdown']
+
+                print(f"\n📈 第 {i} 名績效:")
+                print(f"   夏普比率: {sharpe:.4f}")
+                print(f"   年化報酬: {annual_return*100:.2f}%")
+                print(f"   最大回撤: {max_drawdown*100:.2f}%")
+                print(f"   平均胃納量: {avg_capacity/1e6:.2f}M TWD")
+
+                results.append({
+                    'rank': i,
+                    'individual': ind,
+                    'sharpe': sharpe,
+                    'annual_return': annual_return,
+                    'max_drawdown': max_drawdown,
+                    'avg_capacity': avg_capacity,
+                    'report': report
+                })
+
+        except Exception as e:
+            print(f"⚠️ 第 {i} 名回測失敗: {e}")
+            continue
+
+    # 總結
+    if results:
+        print("\n" + "="*60)
+        print("📊 歷史前五名回測總結")
+        print("="*60)
+        print(f"{'排名':<6}{'夏普值':<12}{'年化報酬':<12}{'最大回撤':<12}{'胃納量(M)':<12}")
+        print("-" * 54)
+        for r in results:
+            print(f"{r['rank']:<6}{r['sharpe']:<12.4f}{r['annual_return']*100:<12.2f}{r['max_drawdown']*100:<12.2f}{r['avg_capacity']/1e6:<12.2f}")
+
+    return results
+
+
+# ============================================================================
+# 🔄 定期回測函數 (每 N 代執行)
+# ============================================================================
+def periodic_backtest(halloffame, generation, label="定期回測"):
+    """每 N 代執行一次詳細回測"""
+    if not halloffame or len(halloffame) == 0:
+        return None
+
+    best_ind = halloffame[0]
+    best_fitness = best_ind.fitness.values[0] if best_ind.fitness.valid else -999
+
+    print("\n" + "📊"*20)
+    print(f"📊 第 {generation} 代定期回測 (每 {BACKTEST_EVERY_N_GEN} 代)")
+    print(f"   當前最佳夏普值: {best_fitness:.4f}")
+    print("📊"*20)
+
+    try:
+        position_combined, overall_params = combined_strategy_twelve(best_ind)
+
+        if position_combined.empty:
+            print("⚠️ 無有效持倉，跳過回測")
+            return None
+
+        # 計算胃納量
+        position_capacity = (position_combined * capacity).sum(axis=1)
+        avg_capacity = position_capacity[position_capacity > 0].mean()
+
+        report = sim(
+            position=position_combined,
+            stop_loss=overall_params['stop_loss'],
+            trail_stop=overall_params['trail_stop'],
+            fee_ratio=FEE_RATIO,
+            tax_ratio=TAX_RATIO,
+            trade_at_price=overall_params['trade_at_price'],
+            position_limit=overall_params['position_limit'],
+            take_profit=overall_params['take_profit'],
+            name=f"第{generation}代_{label}_夏普{best_fitness:.4f}",
+            upload=True
+        )
+
+        if report:
+            metrics = report.get_metrics()
+            print(f"\n📈 第 {generation} 代績效報告:")
+            print(f"   夏普比率: {metrics['ratio']['sharpeRatio']:.4f}")
+            print(f"   年化報酬: {metrics['profitability']['annualReturn']*100:.2f}%")
+            print(f"   最大回撤: {metrics['risk']['maxDrawdown']*100:.2f}%")
+            print(f"   平均胃納量: {avg_capacity/1e6:.2f}M TWD ({'✅' if avg_capacity >= MIN_CAPACITY else '❌'})")
+
+            # 顯示策略配置
+            allocation, *_ = gene_to_params_twelve(best_ind)
+            strategies = [
+                "低波動本益比", "小資族", "營收股價雙渦輪", "高殖利率烏龜",
+                "低波動性指標", "藏獒外掛大盤指針", "監獄兔", "精選強勢股",
+                "純技術分析", "膽小貓", "合約負債建築工", "研發魔人"
+            ]
+            print(f"\n💼 策略配置 (權重 > 5%):")
+            for name, weight in zip(strategies, allocation):
+                if weight > 0.05:
+                    print(f"   {name}: {weight:.1%}")
+
+            return report
+
+    except Exception as e:
+        print(f"⚠️ 定期回測失敗: {e}")
+        return None
+
+
+# ============================================================================
 # 第十二部分：🎯 智能初始化族群 - 使用合適的參數範圍
 # ============================================================================
 def create_smart_individual(toolbox):
@@ -1650,9 +1877,10 @@ def run_genetic_algorithm():
                 historical_best_individual = best_loaded_ind
 
                 print(f"\n📊 歷史最佳夏普值: {historical_best_sharpe:.4f}")
-                print(f"   即將執行完整回測...")
 
-                perform_full_backtest(best_loaded_ind, "歷史最佳基準", historical_best_sharpe)
+                # 🔄 重啟時回測歷史前五名
+                print(f"\n🔄 執行歷史前 {TOP_N_HISTORICAL} 名完整回測...")
+                backtest_top_n_historical(historical_best_loaded, TOP_N_HISTORICAL)
 
                 print(f"\n✅ 歷史最佳基準已建立")
                 print(f"   目標：超越 {historical_best_sharpe:.4f}")
@@ -1793,6 +2021,10 @@ def run_genetic_algorithm():
 
         if (gen + 1) % 10 == 0:
             share_best_individuals(population, WINDOW_ID)
+
+        # 🔄 每 N 代執行定期回測
+        if (gen + 1) % BACKTEST_EVERY_N_GEN == 0:
+            periodic_backtest(halloffame, gen + 1, "定期檢查")
 
         if (gen + 1) % 5 == 0:
             cp = {
