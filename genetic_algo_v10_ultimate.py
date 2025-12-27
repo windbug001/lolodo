@@ -69,21 +69,26 @@ except:
                        'numpy<2.0', 'scikit-learn', '-q'], capture_output=True)
         needs_restart = True
 
-    if needs_restart:
-        try:
-            import google.colab
-            print("\n" + "=" * 60)
-            print("⚠️  套件已更新！請執行以下步驟：")
-            print("   1. 點選上方選單 Runtime -> Restart runtime")
-            print("   2. 重新執行此 cell")
-            print("=" * 60 + "\n")
-            # 嘗試自動重啟
-            from google.colab import runtime
-            runtime.unassign()
-        except:
-            pass
+    return needs_restart
 
-_ensure_package_compatibility()
+_needs_restart = _ensure_package_compatibility()
+
+if _needs_restart:
+    print("\n" + "=" * 60)
+    print("⚠️  套件已更新！Runtime 需要重新啟動")
+    print("=" * 60)
+    try:
+        import google.colab
+        print("   正在自動重啟 runtime...")
+        from google.colab import runtime
+        runtime.unassign()
+    except ImportError:
+        print("   請手動重新執行腳本")
+    except Exception as e:
+        print(f"   自動重啟失敗: {e}")
+        print("   請點選 Runtime -> Restart runtime，然後重新執行")
+    # 停止執行，避免導入不相容的套件
+    raise SystemExit("套件已更新，請重啟 runtime 後重新執行")
 
 # =============================================================================
 # 第一部分：核心設定
