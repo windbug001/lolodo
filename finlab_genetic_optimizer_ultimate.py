@@ -229,51 +229,67 @@ class FinLabDataLoader:
         if not self._cache:
             self._load_all_data()
 
+    def _safe_get(self, key: str, retry=True):
+        """安全載入數據，遇到 EOFError 時清除快取重試"""
+        try:
+            return data.get(key)
+        except (EOFError, Exception) as e:
+            if 'EOF' in str(e) and retry:
+                print(f"   ⚠️  快取損壞，清除後重試: {key}")
+                # 清除快取
+                import subprocess
+                subprocess.run(['find', '/root', '/tmp', '-name', '*.pkl', '-delete'], stderr=subprocess.DEVNULL)
+                subprocess.run(['find', '/root', '/tmp', '-type', 'd', '-name', '*finlab*', '-exec', 'rm', '-rf', '{}', '+'], stderr=subprocess.DEVNULL)
+                # 重試一次（不再重試）
+                return self._safe_get(key, retry=False)
+            else:
+                raise
+
     def _load_all_data(self):
         """載入所有數據"""
         print("📊 載入 FinLab 數據...")
         start_time = time.time()
 
         # 價格相關數據
-        self._cache['close'] = data.get('price:收盤價')
-        self._cache['vol'] = data.get('price:成交股數')
-        self._cache['open'] = data.get('price:開盤價')
-        self._cache['high'] = data.get('price:最高價')
-        self._cache['low'] = data.get('price:最低價')
-        self._cache['adj_close'] = data.get("etl:adj_close")
+        self._cache['close'] = self._safe_get('price:收盤價')
+        self._cache['vol'] = self._safe_get('price:成交股數')
+        self._cache['open'] = self._safe_get('price:開盤價')
+        self._cache['high'] = self._safe_get('price:最高價')
+        self._cache['low'] = self._safe_get('price:最低價')
+        self._cache['adj_close'] = self._safe_get("etl:adj_close")
 
         # 財務數據
-        self._cache['pe'] = data.get('price_earning_ratio:本益比')
-        self._cache['pb'] = data.get("price_earning_ratio:股價淨值比")
-        self._cache['dividend_yield'] = data.get('price_earning_ratio:殖利率(%)')
+        self._cache['pe'] = self._safe_get('price_earning_ratio:本益比')
+        self._cache['pb'] = self._safe_get("price_earning_ratio:股價淨值比")
+        self._cache['dividend_yield'] = self._safe_get('price_earning_ratio:殖利率(%)')
 
         # 營收數據
-        self._cache['rev'] = data.get('monthly_revenue:當月營收')
-        self._cache['rev_yoy_growth'] = data.get('monthly_revenue:去年同月增減(%)')
-        self._cache['rev_month_growth'] = data.get('monthly_revenue:上月比較增減(%)')
+        self._cache['rev'] = self._safe_get('monthly_revenue:當月營收')
+        self._cache['rev_yoy_growth'] = self._safe_get('monthly_revenue:去年同月增減(%)')
+        self._cache['rev_month_growth'] = self._safe_get('monthly_revenue:上月比較增減(%)')
 
         # 基本面指標
-        self._cache['營業利益成長率'] = data.get('fundamental_features:營業利益成長率')
-        self._cache['業外收支營收率'] = data.get('fundamental_features:業外收支營收率')
-        self._cache['營業毛利率'] = data.get("fundamental_features:營業毛利率")
-        self._cache['ROE綜合損益'] = data.get("fundamental_features:ROE綜合損益")
-        self._cache['稅後淨利率'] = data.get("fundamental_features:稅後淨利率")
-        self._cache['稅前淨利率'] = data.get("fundamental_features:稅前淨利率")
+        self._cache['營業利益成長率'] = self._safe_get('fundamental_features:營業利益成長率')
+        self._cache['業外收支營收率'] = self._safe_get('fundamental_features:業外收支營收率')
+        self._cache['營業毛利率'] = self._safe_get("fundamental_features:營業毛利率")
+        self._cache['ROE綜合損益'] = self._safe_get("fundamental_features:ROE綜合損益")
+        self._cache['稅後淨利率'] = self._safe_get("fundamental_features:稅後淨利率")
+        self._cache['稅前淨利率'] = self._safe_get("fundamental_features:稅前淨利率")
 
         # 籌碼資料
-        self._cache['融資使用率'] = data.get('margin_transactions:融資使用率')
-        self._cache['董監持有股數占比'] = data.get("internal_equity_changes:董監持有股數占比")
-        self._cache['inventory'] = data.get("inventory")
+        self._cache['融資使用率'] = self._safe_get('margin_transactions:融資使用率')
+        self._cache['董監持有股數占比'] = self._safe_get("internal_equity_changes:董監持有股數占比")
+        self._cache['inventory'] = self._safe_get("inventory")
 
         # 市值資料
-        self._cache['市值'] = data.get('etl:market_value')
+        self._cache['市值'] = self._safe_get('etl:market_value')
 
         # 財務報表
-        self._cache['股本'] = data.get('financial_statement:股本')
-        self._cache['投資活動現金流'] = data.get('financial_statement:投資活動之淨現金流入_流出')
-        self._cache['營業活動現金流'] = data.get('financial_statement:營業活動之淨現金流入_流出')
-        self._cache['稅後淨利'] = data.get('fundamental_features:經常稅後淨利')
-        self._cache['權益總計'] = data.get('financial_statement:股東權益總額')
+        self._cache['股本'] = self._safe_get('financial_statement:股本')
+        self._cache['投資活動現金流'] = self._safe_get('financial_statement:投資活動之淨現金流入_流出')
+        self._cache['營業活動現金流'] = self._safe_get('financial_statement:營業活動之淨現金流入_流出')
+        self._cache['稅後淨利'] = self._safe_get('fundamental_features:經常稅後淨利')
+        self._cache['權益總計'] = self._safe_get('financial_statement:股東權益總額')
 
         # 技術指標
         self._cache['rsi'] = data.indicator("RSI", adjust_price=False, resample="D", timeperiod=5)
