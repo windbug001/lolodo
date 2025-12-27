@@ -1190,6 +1190,10 @@ class EvolutionEngine:
                 print(f"   穩健性: {stats['best_robustness']:.2f}")
                 print(f"   耗時: {elapsed:.1f}s")
 
+            # 🔥 每10代執行一次完整回測並顯示圖表
+            if (gen + 1) % 10 == 0:
+                self._run_checkpoint_backtest(population, gen + 1)
+
         # Pareto 前緣
         pareto_front = tools.sortNondominated(population, len(population), first_front_only=True)[0]
 
@@ -1245,6 +1249,82 @@ class EvolutionEngine:
         self.logger.log_generation(gen, N_GENERATIONS, stats)
 
         return stats
+
+    def _run_checkpoint_backtest(self, population: List, gen: int):
+        """
+        🔥 每10代執行一次完整回測並顯示 FinLab 圖表
+
+        Args:
+            population: 當前族群
+            gen: 當前世代數
+        """
+        print(f"\n{'='*70}")
+        print(f"📊 第 {gen} 代 - 完整回測報告")
+        print(f"{'='*70}")
+
+        try:
+            # 找出當前最佳個體
+            best_ind = max(population, key=lambda x: sum(x.fitness.values))
+            best_params = gene_decoder.decode(best_ind)
+
+            # 顯示當前最佳權重
+            print(f"\n🎯 當前最佳參數:")
+            print(f"   策略權重: 低波動 {best_params['weight_lv']:.1%} | "
+                  f"小資族 {best_params['weight_si']:.1%} | "
+                  f"雙渦輪 {best_params['weight_rpt']:.1%}")
+            print(f"   停損: {best_params['stop_loss']:.1%} | "
+                  f"移動停利: {best_params['trail_stop']:.1%} | "
+                  f"停利: {best_params['take_profit']:.1%}")
+
+            # 組合策略
+            position = strategy_engine.combine_strategies(best_params)
+
+            if position is None or position.empty:
+                print("   ⚠️ 策略產生空持股，跳過回測")
+                return
+
+            # 執行完整回測並上傳顯示圖表
+            report = sim(
+                position=position,
+                fee_ratio=1.425/1000,
+                tax_ratio=3/1000,
+                trade_at_price="high_low_avg",
+                position_limit=best_params.get('position_limit', 0.35),
+                stop_loss=best_params.get('stop_loss', 0.25),
+                trail_stop=best_params.get('trail_stop', 0.35),
+                take_profit=best_params.get('take_profit', 0.7),
+                stop_trading_next_period=False,
+                upload=True,  # 🔥 上傳以顯示完整圖表
+                name=f'GA_W{WINDOW_ID}_Gen{gen}'
+            )
+
+            # 顯示完整報告（包含圖表）
+            print(f"\n📈 回測結果:")
+            report.display()
+
+            # 取得指標
+            metrics = report.get_metrics()
+            sharpe = metrics['ratio'].get('sharpeRatio', 0) or 0
+            capacity = metrics['liquidity'].get('capacity', 0) or 0
+            annual_return = metrics['profitability'].get('annualReturn', 0) or 0
+
+            print(f"\n🎯 關鍵指標:")
+            print(f"   夏普值: {sharpe:.2f}" + (" ✅ 達標!" if sharpe >= 4.0 else f" (目標 4.0, 差 {4.0-sharpe:.2f})"))
+            print(f"   胃納量: {capacity/1e4:.0f} 萬" + (" ✅ 達標!" if capacity >= 1e7 else f" (目標 1000萬)"))
+            print(f"   年化報酬: {annual_return:.1%}")
+
+            # 保存當前最佳參數
+            checkpoint_file = f"{paths.output_dir}/checkpoint_gen{gen}_params.json"
+            with open(checkpoint_file, 'w') as f:
+                json.dump(best_params, f, indent=2)
+            print(f"\n💾 參數已保存: {checkpoint_file}")
+
+        except Exception as e:
+            print(f"   ⚠️ 檢查點回測失敗: {e}")
+            import traceback
+            traceback.print_exc()
+
+        print(f"{'='*70}\n")
 
     def _print_pareto_front(self, pareto_front: List):
         """輸出 Pareto 前緣"""
