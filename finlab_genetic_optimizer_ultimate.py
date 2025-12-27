@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
+from __future__ import annotations
 """
 ================================================================================
 🧬 FinLab 台股基因演算法優化系統 - 終極版
@@ -33,8 +34,6 @@ FinLab Taiwan Stock Genetic Algorithm Optimizer - Ultimate Edition
 # 🔥 【重要】在 import 任何套件之前，先禁用 FinLab 快取以避免 EOFError
 import os
 os.environ['FINLAB_DISABLE_CACHE'] = '1'
-
-from __future__ import annotations
 
 import warnings
 warnings.filterwarnings('ignore')
