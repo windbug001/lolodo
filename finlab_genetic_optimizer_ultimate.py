@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
+from __future__ import annotations
 """
 ================================================================================
 🧬 FinLab 台股基因演算法優化系統 - 終極版
@@ -30,9 +31,7 @@ FinLab Taiwan Stock Genetic Algorithm Optimizer - Ultimate Edition
 ================================================================================
 """
 
-from __future__ import annotations
-
-# 🔥 【重要】在 import 其他套件之前，先禁用 FinLab 快取以避免 EOFError
+# 🔥 【重要】在 import 任何套件之前，先禁用 FinLab 快取以避免 EOFError
 import os
 os.environ['FINLAB_DISABLE_CACHE'] = '1'
 
@@ -82,6 +81,10 @@ WALK_FORWARD_WINDOWS = 3  # 3 個時間窗口
 TRAIN_MONTHS = 24         # 訓練期 24 個月
 TEST_MONTHS = 6           # 測試期 6 個月
 
+# 🔄 定期回測設定
+BACKTEST_EVERY_N_GEN = 20  # 每 N 代執行一次詳細回測
+TOP_N_HISTORICAL = 5       # 重啟時回測歷史前 N 名
+
 # 回測設定
 BACKTEST_START = '2017-01-01'
 BACKTEST_END = None
@@ -98,26 +101,13 @@ def clear_finlab_cache():
     """清除可能損壞的 FinLab 快取（必須在載入 FinLab 之前執行）"""
     import glob
     import shutil
-    import subprocess
 
-    print("🔧 清除 FinLab 快取...")
-
-    # 1. 清除所有 .pkl 檔案
-    try:
-        subprocess.run(['find', '/root', '/tmp', '-name', '*.pkl', '-type', 'f', '-delete'],
-                      stderr=subprocess.DEVNULL, timeout=5)
-    except:
-        pass
-
-    # 2. 清除 finlab 相關目錄
     cache_patterns = [
         '/root/.finlab*',
         '/tmp/.finlab*',
         '/tmp/finlab*',
         os.path.expanduser('~/.finlab*'),
         '/content/.finlab*',
-        '/root/*finlab*',
-        '/tmp/*finlab*',
     ]
 
     cleared = 0
@@ -133,19 +123,8 @@ def clear_finlab_cache():
         except:
             pass
 
-    # 3. 清除 pandas 快取
-    pandas_cache = os.path.expanduser('~/.cache/pandas')
-    if os.path.exists(pandas_cache):
-        try:
-            shutil.rmtree(pandas_cache)
-            cleared += 1
-        except:
-            pass
-
     if cleared > 0:
-        print(f"   ✅ 已清除 {cleared} 個快取檔案/目錄")
-    else:
-        print("   ℹ️  無快取需要清除")
+        print(f"🔧 已清除 {cleared} 個快取檔案")
 
 # 🔥 在載入 FinLab 之前先清除快取
 clear_finlab_cache()
@@ -253,67 +232,51 @@ class FinLabDataLoader:
         if not self._cache:
             self._load_all_data()
 
-    def _safe_get(self, key: str, retry=True):
-        """安全載入數據，遇到 EOFError 時清除快取重試"""
-        try:
-            return data.get(key)
-        except (EOFError, Exception) as e:
-            if 'EOF' in str(e) and retry:
-                print(f"   ⚠️  快取損壞，清除後重試: {key}")
-                # 清除快取
-                import subprocess
-                subprocess.run(['find', '/root', '/tmp', '-name', '*.pkl', '-delete'], stderr=subprocess.DEVNULL)
-                subprocess.run(['find', '/root', '/tmp', '-type', 'd', '-name', '*finlab*', '-exec', 'rm', '-rf', '{}', '+'], stderr=subprocess.DEVNULL)
-                # 重試一次（不再重試）
-                return self._safe_get(key, retry=False)
-            else:
-                raise
-
     def _load_all_data(self):
         """載入所有數據"""
         print("📊 載入 FinLab 數據...")
         start_time = time.time()
 
         # 價格相關數據
-        self._cache['close'] = self._safe_get('price:收盤價')
-        self._cache['vol'] = self._safe_get('price:成交股數')
-        self._cache['open'] = self._safe_get('price:開盤價')
-        self._cache['high'] = self._safe_get('price:最高價')
-        self._cache['low'] = self._safe_get('price:最低價')
-        self._cache['adj_close'] = self._safe_get("etl:adj_close")
+        self._cache['close'] = data.get('price:收盤價')
+        self._cache['vol'] = data.get('price:成交股數')
+        self._cache['open'] = data.get('price:開盤價')
+        self._cache['high'] = data.get('price:最高價')
+        self._cache['low'] = data.get('price:最低價')
+        self._cache['adj_close'] = data.get("etl:adj_close")
 
         # 財務數據
-        self._cache['pe'] = self._safe_get('price_earning_ratio:本益比')
-        self._cache['pb'] = self._safe_get("price_earning_ratio:股價淨值比")
-        self._cache['dividend_yield'] = self._safe_get('price_earning_ratio:殖利率(%)')
+        self._cache['pe'] = data.get('price_earning_ratio:本益比')
+        self._cache['pb'] = data.get("price_earning_ratio:股價淨值比")
+        self._cache['dividend_yield'] = data.get('price_earning_ratio:殖利率(%)')
 
         # 營收數據
-        self._cache['rev'] = self._safe_get('monthly_revenue:當月營收')
-        self._cache['rev_yoy_growth'] = self._safe_get('monthly_revenue:去年同月增減(%)')
-        self._cache['rev_month_growth'] = self._safe_get('monthly_revenue:上月比較增減(%)')
+        self._cache['rev'] = data.get('monthly_revenue:當月營收')
+        self._cache['rev_yoy_growth'] = data.get('monthly_revenue:去年同月增減(%)')
+        self._cache['rev_month_growth'] = data.get('monthly_revenue:上月比較增減(%)')
 
         # 基本面指標
-        self._cache['營業利益成長率'] = self._safe_get('fundamental_features:營業利益成長率')
-        self._cache['業外收支營收率'] = self._safe_get('fundamental_features:業外收支營收率')
-        self._cache['營業毛利率'] = self._safe_get("fundamental_features:營業毛利率")
-        self._cache['ROE綜合損益'] = self._safe_get("fundamental_features:ROE綜合損益")
-        self._cache['稅後淨利率'] = self._safe_get("fundamental_features:稅後淨利率")
-        self._cache['稅前淨利率'] = self._safe_get("fundamental_features:稅前淨利率")
+        self._cache['營業利益成長率'] = data.get('fundamental_features:營業利益成長率')
+        self._cache['業外收支營收率'] = data.get('fundamental_features:業外收支營收率')
+        self._cache['營業毛利率'] = data.get("fundamental_features:營業毛利率")
+        self._cache['ROE綜合損益'] = data.get("fundamental_features:ROE綜合損益")
+        self._cache['稅後淨利率'] = data.get("fundamental_features:稅後淨利率")
+        self._cache['稅前淨利率'] = data.get("fundamental_features:稅前淨利率")
 
         # 籌碼資料
-        self._cache['融資使用率'] = self._safe_get('margin_transactions:融資使用率')
-        self._cache['董監持有股數占比'] = self._safe_get("internal_equity_changes:董監持有股數占比")
-        self._cache['inventory'] = self._safe_get("inventory")
+        self._cache['融資使用率'] = data.get('margin_transactions:融資使用率')
+        self._cache['董監持有股數占比'] = data.get("internal_equity_changes:董監持有股數占比")
+        self._cache['inventory'] = data.get("inventory")
 
         # 市值資料
-        self._cache['市值'] = self._safe_get('etl:market_value')
+        self._cache['市值'] = data.get('etl:market_value')
 
         # 財務報表
-        self._cache['股本'] = self._safe_get('financial_statement:股本')
-        self._cache['投資活動現金流'] = self._safe_get('financial_statement:投資活動之淨現金流入_流出')
-        self._cache['營業活動現金流'] = self._safe_get('financial_statement:營業活動之淨現金流入_流出')
-        self._cache['稅後淨利'] = self._safe_get('fundamental_features:經常稅後淨利')
-        self._cache['權益總計'] = self._safe_get('financial_statement:股東權益總額')
+        self._cache['股本'] = data.get('financial_statement:股本')
+        self._cache['投資活動現金流'] = data.get('financial_statement:投資活動之淨現金流入_流出')
+        self._cache['營業活動現金流'] = data.get('financial_statement:營業活動之淨現金流入_流出')
+        self._cache['稅後淨利'] = data.get('fundamental_features:經常稅後淨利')
+        self._cache['權益總計'] = data.get('financial_statement:股東權益總額')
 
         # 技術指標
         self._cache['rsi'] = data.indicator("RSI", adjust_price=False, resample="D", timeperiod=5)
@@ -1117,6 +1080,93 @@ class ParetoArchiveManager:
 
         return population
 
+    def backtest_top_n(self, n: int = TOP_N_HISTORICAL):
+        """
+        🔄 重啟時回測歷史前 N 名
+        """
+        if not self.archive:
+            print("⚠️ 無歷史存檔可供回測")
+            return []
+
+        print(f"\n{'🏆'*30}")
+        print(f"🏆 重啟時回測歷史前 {n} 名個體 🏆")
+        print(f"{'🏆'*30}")
+
+        # 取得前 N 名
+        top_n = sorted(self.archive, key=lambda x: sum(x['fitness']), reverse=True)[:n]
+        results = []
+
+        for i, elite in enumerate(top_n, 1):
+            print(f"\n{'='*60}")
+            print(f"📊 回測第 {i} 名歷史個體")
+            print(f"{'='*60}")
+
+            try:
+                params = gene_decoder.decode(elite['genes'])
+
+                print(f"   策略權重: 低波動 {params['weight_lv']:.1%} | "
+                      f"小資族 {params['weight_si']:.1%} | "
+                      f"雙渦輪 {params['weight_rpt']:.1%}")
+
+                # 組合策略
+                position = strategy_engine.combine_strategies(
+                    params['weight_lv'],
+                    params['weight_si'],
+                    params['weight_rpt'],
+                    params
+                )
+
+                if position.empty or position.sum().sum() == 0:
+                    print(f"⚠️ 第 {i} 名：無有效持倉")
+                    continue
+
+                # 執行回測
+                report = sim(
+                    position,
+                    stop_loss=params['stop_loss'],
+                    trail_stop=params['trail_stop'],
+                    take_profit=params['take_profit'],
+                    trade_at_price='close',
+                    upload=True,
+                    name=f"歷史第{i}名_視窗{WINDOW_ID}"
+                )
+
+                if report:
+                    metrics = report.get_metrics()
+                    sharpe = metrics.get('ratio', {}).get('sharpeRatio', 0)
+                    annual_return = metrics.get('profitability', {}).get('annualReturn', 0)
+                    max_dd = metrics.get('risk', {}).get('maxDrawdown', 0)
+
+                    print(f"\n📈 第 {i} 名績效:")
+                    print(f"   夏普比率: {sharpe:.4f}")
+                    print(f"   年化報酬: {annual_return*100:.2f}%")
+                    print(f"   最大回撤: {max_dd*100:.2f}%")
+
+                    results.append({
+                        'rank': i,
+                        'sharpe': sharpe,
+                        'annual_return': annual_return,
+                        'max_drawdown': max_dd,
+                        'fitness': elite['fitness']
+                    })
+
+            except Exception as e:
+                print(f"⚠️ 第 {i} 名回測失敗: {e}")
+                continue
+
+        # 總結
+        if results:
+            print(f"\n{'='*60}")
+            print(f"📊 歷史前 {n} 名回測總結")
+            print(f"{'='*60}")
+            print(f"{'排名':<6}{'夏普值':<12}{'年化報酬':<12}{'最大回撤':<12}")
+            print("-" * 42)
+            for r in results:
+                print(f"{r['rank']:<6}{r['sharpe']:<12.4f}{r['annual_return']*100:<12.2f}%{r['max_drawdown']*100:<12.2f}%")
+
+        return results
+
+
 pareto_archive = ParetoArchiveManager(paths.pareto_archive)
 
 # =============================================================================
@@ -1231,6 +1281,10 @@ class EvolutionEngine:
                 print(f"   穩健性: {stats['best_robustness']:.2f}")
                 print(f"   耗時: {elapsed:.1f}s")
 
+            # 🔥 每 N 代執行一次完整回測並顯示圖表
+            if (gen + 1) % BACKTEST_EVERY_N_GEN == 0:
+                self._run_checkpoint_backtest(population, gen + 1)
+
         # Pareto 前緣
         pareto_front = tools.sortNondominated(population, len(population), first_front_only=True)[0]
 
@@ -1287,6 +1341,82 @@ class EvolutionEngine:
 
         return stats
 
+    def _run_checkpoint_backtest(self, population: List, gen: int):
+        """
+        🔥 每10代執行一次完整回測並顯示 FinLab 圖表
+
+        Args:
+            population: 當前族群
+            gen: 當前世代數
+        """
+        print(f"\n{'='*70}")
+        print(f"📊 第 {gen} 代 - 完整回測報告")
+        print(f"{'='*70}")
+
+        try:
+            # 找出當前最佳個體
+            best_ind = max(population, key=lambda x: sum(x.fitness.values))
+            best_params = gene_decoder.decode(best_ind)
+
+            # 顯示當前最佳權重
+            print(f"\n🎯 當前最佳參數:")
+            print(f"   策略權重: 低波動 {best_params['weight_lv']:.1%} | "
+                  f"小資族 {best_params['weight_si']:.1%} | "
+                  f"雙渦輪 {best_params['weight_rpt']:.1%}")
+            print(f"   停損: {best_params['stop_loss']:.1%} | "
+                  f"移動停利: {best_params['trail_stop']:.1%} | "
+                  f"停利: {best_params['take_profit']:.1%}")
+
+            # 組合策略
+            position = strategy_engine.combine_strategies(best_params)
+
+            if position is None or position.empty:
+                print("   ⚠️ 策略產生空持股，跳過回測")
+                return
+
+            # 執行完整回測並上傳顯示圖表
+            report = sim(
+                position=position,
+                fee_ratio=1.425/1000,
+                tax_ratio=3/1000,
+                trade_at_price="high_low_avg",
+                position_limit=best_params.get('position_limit', 0.35),
+                stop_loss=best_params.get('stop_loss', 0.25),
+                trail_stop=best_params.get('trail_stop', 0.35),
+                take_profit=best_params.get('take_profit', 0.7),
+                stop_trading_next_period=False,
+                upload=True,  # 🔥 上傳以顯示完整圖表
+                name=f'GA_W{WINDOW_ID}_Gen{gen}'
+            )
+
+            # 顯示完整報告（包含圖表）
+            print(f"\n📈 回測結果:")
+            report.display()
+
+            # 取得指標
+            metrics = report.get_metrics()
+            sharpe = metrics['ratio'].get('sharpeRatio', 0) or 0
+            capacity = metrics['liquidity'].get('capacity', 0) or 0
+            annual_return = metrics['profitability'].get('annualReturn', 0) or 0
+
+            print(f"\n🎯 關鍵指標:")
+            print(f"   夏普值: {sharpe:.2f}" + (" ✅ 達標!" if sharpe >= 4.0 else f" (目標 4.0, 差 {4.0-sharpe:.2f})"))
+            print(f"   胃納量: {capacity/1e4:.0f} 萬" + (" ✅ 達標!" if capacity >= 1e7 else f" (目標 1000萬)"))
+            print(f"   年化報酬: {annual_return:.1%}")
+
+            # 保存當前最佳參數
+            checkpoint_file = f"{paths.output_dir}/checkpoint_gen{gen}_params.json"
+            with open(checkpoint_file, 'w') as f:
+                json.dump(best_params, f, indent=2)
+            print(f"\n💾 參數已保存: {checkpoint_file}")
+
+        except Exception as e:
+            print(f"   ⚠️ 檢查點回測失敗: {e}")
+            import traceback
+            traceback.print_exc()
+
+        print(f"{'='*70}\n")
+
     def _print_pareto_front(self, pareto_front: List):
         """輸出 Pareto 前緣"""
         print(f"\n{'='*70}")
@@ -1324,6 +1454,13 @@ def main():
 ║  🧬 基因：{GeneDecoder.GENE_LENGTH} 個參數                                        ║
 ╚════════════════════════════════════════════════════════════════╝
     """)
+
+    # 🔄 重啟時回測歷史前 N 名
+    if pareto_archive.archive:
+        print(f"\n📂 發現 {len(pareto_archive.archive)} 個歷史精英，執行回測...")
+        pareto_archive.backtest_top_n(TOP_N_HISTORICAL)
+    else:
+        print("\n📂 無歷史存檔，將從頭開始演化")
 
     # 建立演化引擎
     engine = EvolutionEngine(toolbox, pareto_archive)
