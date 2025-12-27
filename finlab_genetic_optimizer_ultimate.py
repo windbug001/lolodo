@@ -98,13 +98,26 @@ def clear_finlab_cache():
     """清除可能損壞的 FinLab 快取（必須在載入 FinLab 之前執行）"""
     import glob
     import shutil
+    import subprocess
 
+    print("🔧 清除 FinLab 快取...")
+
+    # 1. 清除所有 .pkl 檔案
+    try:
+        subprocess.run(['find', '/root', '/tmp', '-name', '*.pkl', '-type', 'f', '-delete'],
+                      stderr=subprocess.DEVNULL, timeout=5)
+    except:
+        pass
+
+    # 2. 清除 finlab 相關目錄
     cache_patterns = [
         '/root/.finlab*',
         '/tmp/.finlab*',
         '/tmp/finlab*',
         os.path.expanduser('~/.finlab*'),
         '/content/.finlab*',
+        '/root/*finlab*',
+        '/tmp/*finlab*',
     ]
 
     cleared = 0
@@ -120,8 +133,19 @@ def clear_finlab_cache():
         except:
             pass
 
+    # 3. 清除 pandas 快取
+    pandas_cache = os.path.expanduser('~/.cache/pandas')
+    if os.path.exists(pandas_cache):
+        try:
+            shutil.rmtree(pandas_cache)
+            cleared += 1
+        except:
+            pass
+
     if cleared > 0:
-        print(f"🔧 已清除 {cleared} 個快取檔案")
+        print(f"   ✅ 已清除 {cleared} 個快取檔案/目錄")
+    else:
+        print("   ℹ️  無快取需要清除")
 
 # 🔥 在載入 FinLab 之前先清除快取
 clear_finlab_cache()
