@@ -12,28 +12,37 @@ from datetime import datetime
 from pathlib import Path
 
 # ===== 設定區 =====
-# Google Drive 基礎路徑
-BASE_DIR = "/content/drive/MyDrive/FinLab_GA_優化_終極版"
-
-# 監控的程式配置
+# 監控的程式配置（每個程式有不同的基礎路徑）
 PROGRAMS = {
     "小小龍": {
-        "prefix": "xiaoxiaolong",
+        "base_dir": "/content/drive/MyDrive/FinLab_GA_優化_終極版",
         "strategies": 3,
         "windows": [1, 2, 3],
         "target_capacity": 5_000_000,
+        "checkpoint_patterns": [
+            "window_{window_id}/checkpoint.pkl",
+            "window_{window_id}/checkpoint_latest.pkl",
+        ],
     },
     "快快龍": {
-        "prefix": "kuaikuailong",
+        "base_dir": "/content/drive/MyDrive/投資策略優化_v12_六組合快快龍",
         "strategies": 6,
         "windows": [1, 2, 3],
         "target_capacity": 10_000_000,
+        "checkpoint_patterns": [
+            "window_{window_id}/checkpoint.pkl",
+            "window_{window_id}/checkpoint_latest.pkl",
+        ],
     },
     "天空龍": {
-        "prefix": "tiankonglong",
+        "base_dir": "/content/drive/MyDrive/投資策略優化_十二策略_高胃納量版",
         "strategies": 12,
-        "windows": [1, 2, 3],
+        "windows": [1],  # 只監控視窗 1
         "target_capacity": 50_000_000,
+        "checkpoint_patterns": [
+            "window_{window_id}/checkpoints/checkpoint_window_{window_id}_latest.pkl",
+            "window_{window_id}/checkpoint.pkl",
+        ],
     },
 }
 
@@ -52,24 +61,24 @@ def load_checkpoint(program_name, window_id):
     if not config:
         return None
 
-    # 嘗試多種可能的 checkpoint 路徑
-    possible_paths = [
-        # 標準路徑
-        f"{BASE_DIR}/window_{window_id}/checkpoint_{config['prefix']}_w{window_id}.pkl",
-        f"{BASE_DIR}/window_{window_id}/checkpoint_w{window_id}.pkl",
-        # 直接在 window 資料夾
-        f"{BASE_DIR}/window{window_id}/checkpoint.pkl",
-        f"{BASE_DIR}/window_{window_id}/checkpoint.pkl",
-        # 舊格式
-        f"{BASE_DIR}/checkpoint_window{window_id}.pkl",
-    ]
+    base_dir = config.get('base_dir', '')
+    patterns = config.get('checkpoint_patterns', [])
+
+    # 根據 pattern 生成路徑
+    possible_paths = []
+    for pattern in patterns:
+        path = f"{base_dir}/{pattern.format(window_id=window_id)}"
+        possible_paths.append(path)
 
     for path in possible_paths:
         if os.path.exists(path):
             try:
                 with open(path, 'rb') as f:
                     data = pickle.load(f)
-                    data['_checkpoint_path'] = path
+                    if isinstance(data, dict):
+                        data['_checkpoint_path'] = path
+                    else:
+                        data = {'_raw_data': data, '_checkpoint_path': path}
                     return data
             except Exception as e:
                 continue
@@ -82,11 +91,12 @@ def load_hall_of_fame(program_name, window_id):
     if not config:
         return None
 
+    base_dir = config.get('base_dir', '')
     possible_paths = [
-        f"{BASE_DIR}/window_{window_id}/hall_of_fame_{config['prefix']}_w{window_id}.pkl",
-        f"{BASE_DIR}/window_{window_id}/hall_of_fame_w{window_id}.pkl",
-        f"{BASE_DIR}/window_{window_id}/halloffame.pkl",
-        f"{BASE_DIR}/hall_of_fame_window{window_id}.pkl",
+        f"{base_dir}/window_{window_id}/hall_of_fame.pkl",
+        f"{base_dir}/window_{window_id}/halloffame.pkl",
+        f"{base_dir}/window_{window_id}/pareto_front.pkl",
+        f"{base_dir}/shared_pareto/pareto_archive_w{window_id}.pkl",
     ]
 
     for path in possible_paths:
