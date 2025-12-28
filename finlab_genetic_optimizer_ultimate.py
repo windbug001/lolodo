@@ -411,7 +411,9 @@ class CrossWindowManager:
             for ind in elites:
                 elite_data['elites'].append({
                     'gene': list(ind),
-                    'fitness': ind.fitness.values[0] if ind.fitness.valid else 0.0
+                    # 🔧 保存完整的多目標 fitness values
+                    'fitness': list(ind.fitness.values) if ind.fitness.valid else [0.0, 0.0, 0.0, 0.0],
+                    'fitness_sum': sum(ind.fitness.values) if ind.fitness.valid else 0.0
                 })
 
             filename = f"{self.shared_dir}/window_{self.window_id}_elites.pkl"
@@ -448,9 +450,16 @@ class CrossWindowManager:
 
                 elites = data.get('elites', [])[:max_per_window]
                 for elite in elites:
+                    # 🔧 支援新舊格式
+                    fitness = elite['fitness']
+                    fitness_sum = elite.get('fitness_sum', 0)
+                    if fitness_sum == 0:
+                        fitness_sum = sum(fitness) if isinstance(fitness, (list, tuple)) else fitness
+
                     all_external_elites.append({
                         'gene': elite['gene'],
-                        'fitness': elite['fitness'],
+                        'fitness': fitness,
+                        'fitness_sum': fitness_sum,
                         'source_window': other_window,
                         'generation': data.get('generation', 0)
                     })
@@ -460,7 +469,8 @@ class CrossWindowManager:
             except Exception as e:
                 continue
 
-        all_external_elites.sort(key=lambda x: x['fitness'], reverse=True)
+        # 🔧 按 fitness_sum 排序（支援多目標）
+        all_external_elites.sort(key=lambda x: x['fitness_sum'], reverse=True)
         return all_external_elites
 
     def perform_cross_window_exchange(self, population: List, generation: int, toolbox) -> List:
@@ -477,22 +487,34 @@ class CrossWindowManager:
             return population
 
         n_inject = min(len(external_elites), len(population) // 4)
-        population.sort(key=lambda x: x.fitness.values[0] if x.fitness.valid else 0)
+        population.sort(key=lambda x: sum(x.fitness.values) if x.fitness.valid else 0)
 
         injected_count = 0
         for i, ext_elite in enumerate(external_elites[:n_inject]):
             new_ind = toolbox.individual_from_gene(ext_elite['gene'])
-            new_ind.fitness.values = (ext_elite['fitness'],)
+            # 🔧 支援多目標 fitness values
+            fitness_vals = ext_elite['fitness']
+            if isinstance(fitness_vals, (list, tuple)) and len(fitness_vals) == 4:
+                new_ind.fitness.values = tuple(fitness_vals)
+            else:
+                # 相容舊格式（單一 fitness 值）：重新評估
+                del new_ind.fitness.values  # 標記為需要重新評估
             population[i] = new_ind
             injected_count += 1
 
         print(f"   ✅ 注入 {injected_count} 個外部精英")
 
+        # 取得最佳外部適應度（相容新舊格式）
+        best_fitness = ext_elite.get('fitness_sum', 0)
+        if best_fitness == 0:
+            f = external_elites[0]['fitness']
+            best_fitness = sum(f) if isinstance(f, (list, tuple)) else f
+
         notifier.send(
             f"🔄 **視窗 {self.window_id} 基因交換**\n"
             f"• 第 {generation} 代\n"
             f"• 注入 {injected_count} 個外部精英\n"
-            f"• 最佳外部適應度: {external_elites[0]['fitness']:.4f}"
+            f"• 最佳外部適應度: {best_fitness:.4f}"
         )
 
         return population
