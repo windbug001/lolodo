@@ -1419,7 +1419,122 @@ class ParetoArchiveManager:
 pareto_archive = ParetoArchiveManager(paths.pareto_archive)
 
 # =============================================================================
-# 第十一部分：演化引擎
+# 第十一部分：Checkpoint 管理器（支援斷點續傳）
+# =============================================================================
+class CheckpointManager:
+    """Checkpoint 管理器 - 支援斷點續傳"""
+
+    def __init__(self, window_id: int, base_dir: str = BASE_DIR):
+        self.window_id = window_id
+        self.checkpoint_dir = f"{base_dir}/window_{window_id}"
+        self.checkpoint_file = f"{self.checkpoint_dir}/checkpoint.pkl"
+        Path(self.checkpoint_dir).mkdir(parents=True, exist_ok=True)
+
+    def save(self, population: List, generation: int, pareto_front: List = None,
+             history: List = None, random_state=None, numpy_state=None):
+        """保存 checkpoint"""
+        try:
+            checkpoint_data = {
+                'population': [{'genes': list(ind), 'fitness': list(ind.fitness.values) if ind.fitness.valid else None}
+                              for ind in population],
+                'generation': generation,
+                'pareto_front': [{'genes': list(ind), 'fitness': list(ind.fitness.values)}
+                                for ind in pareto_front] if pareto_front else [],
+                'history': history or [],
+                'random_state': random_state or random.getstate(),
+                'numpy_state': numpy_state or np.random.get_state(),
+                'timestamp': datetime.now().isoformat(),
+                'window_id': self.window_id
+            }
+
+            success = SafeFileManager.safe_pickle_save(checkpoint_data, self.checkpoint_file)
+            if success:
+                print(f"   💾 Checkpoint 已保存 (第 {generation} 代)")
+            return success
+
+        except Exception as e:
+            print(f"   ⚠️ Checkpoint 保存失敗: {e}")
+            return False
+
+    def load(self, toolbox) -> dict:
+        """載入 checkpoint"""
+        if not os.path.exists(self.checkpoint_file):
+            print("ℹ️ 無 checkpoint，從頭開始")
+            return None
+
+        try:
+            with open(self.checkpoint_file, 'rb') as f:
+                data = pickle.load(f)
+
+            # 驗證 checkpoint 有效性
+            if not data.get('population') or not data.get('generation'):
+                print("⚠️ Checkpoint 無效，從頭開始")
+                return None
+
+            # 重建族群
+            population = []
+            for ind_data in data['population']:
+                ind = toolbox.individual_from_gene(ind_data['genes'])
+                if ind_data['fitness'] and len(ind_data['fitness']) == 4:
+                    ind.fitness.values = tuple(ind_data['fitness'])
+                population.append(ind)
+
+            # 重建 Pareto 前緣
+            pareto_front = []
+            for ind_data in data.get('pareto_front', []):
+                ind = toolbox.individual_from_gene(ind_data['genes'])
+                if ind_data['fitness'] and len(ind_data['fitness']) == 4:
+                    ind.fitness.values = tuple(ind_data['fitness'])
+                pareto_front.append(ind)
+
+            # 恢復隨機狀態
+            if data.get('random_state'):
+                random.setstate(data['random_state'])
+            if data.get('numpy_state'):
+                np.random.set_state(data['numpy_state'])
+
+            print(f"✅ 從 checkpoint 恢復: 第 {data['generation']} 代, 族群 {len(population)}")
+            print(f"   📅 保存時間: {data.get('timestamp', 'N/A')}")
+
+            return {
+                'population': population,
+                'generation': data['generation'],
+                'pareto_front': pareto_front,
+                'history': data.get('history', [])
+            }
+
+        except Exception as e:
+            print(f"⚠️ Checkpoint 載入失敗: {e}")
+            return None
+
+    def exists(self) -> bool:
+        """檢查是否有 checkpoint"""
+        return os.path.exists(self.checkpoint_file)
+
+    def get_info(self) -> dict:
+        """取得 checkpoint 資訊"""
+        if not self.exists():
+            return None
+
+        try:
+            with open(self.checkpoint_file, 'rb') as f:
+                data = pickle.load(f)
+            return {
+                'generation': data.get('generation', 0),
+                'timestamp': data.get('timestamp', 'N/A'),
+                'population_size': len(data.get('population', []))
+            }
+        except:
+            return None
+
+
+# 初始化 checkpoint 管理器
+checkpoint_mgr = CheckpointManager(WINDOW_ID, BASE_DIR)
+print("✅ Checkpoint 管理器已初始化")
+
+
+# =============================================================================
+# 第十二部分：演化引擎
 # =============================================================================
 class ProgressLogger:
     """進度日誌記錄器（用於監控系統）"""
@@ -1473,23 +1588,37 @@ class EvolutionEngine:
         self.logger = ProgressLogger(WINDOW_ID)  # 🔥 初始化進度日誌記錄器
 
     def run(self, n_generations: int = N_GENERATIONS) -> Tuple[List, List]:
-        """執行演化"""
+        """執行演化（支援斷點續傳）"""
         print(f"\n{'='*70}")
         print(f"🚀 開始演化")
         print(f"   族群: {POPULATION_SIZE}, 世代: {n_generations}")
         print(f"{'='*70}\n")
 
-        # 初始化族群
-        population = self.toolbox.population(n=POPULATION_SIZE)
+        # 🔥 嘗試從 checkpoint 恢復
+        start_gen = 0
+        checkpoint_data = checkpoint_mgr.load(self.toolbox)
 
-        # 注入歷史精英
-        population = self.pareto_mgr.inject_elites(population, ratio=0.3)
+        if checkpoint_data:
+            population = checkpoint_data['population']
+            start_gen = checkpoint_data['generation']
+            self.history = checkpoint_data.get('history', [])
+            print(f"🔄 從第 {start_gen} 代繼續演化...")
+            print(f"   剩餘世代: {n_generations - start_gen}")
 
-        # 初始評估
-        population = self._evaluate_population(population)
+            # 重新評估沒有 fitness 的個體
+            population = self._evaluate_population(population)
+        else:
+            # 初始化新族群
+            population = self.toolbox.population(n=POPULATION_SIZE)
 
-        # 演化循環
-        for gen in range(n_generations):
+            # 注入歷史精英
+            population = self.pareto_mgr.inject_elites(population, ratio=0.3)
+
+            # 初始評估
+            population = self._evaluate_population(population)
+
+        # 演化循環（從 start_gen 繼續）
+        for gen in range(start_gen, n_generations):
             start_time = time.time()
 
             # 選擇
@@ -1529,8 +1658,18 @@ class EvolutionEngine:
                 # 重新評估新注入的個體
                 population = self._evaluate_population(population)
 
+            # 🔥 每 5 代保存 checkpoint
+            if (gen + 1) % 5 == 0:
+                pareto_front = tools.sortNondominated(population, len(population), first_front_only=True)[0]
+                checkpoint_mgr.save(
+                    population=population,
+                    generation=gen + 1,
+                    pareto_front=pareto_front,
+                    history=self.history
+                )
+
             # 輸出
-            if (gen + 1) % 5 == 0 or gen == 0:
+            if (gen + 1) % 5 == 0 or gen == start_gen:
                 print(f"=== 第 {gen+1}/{n_generations} 代 ===")
                 print(f"   最佳綜合: {stats['best_composite']:.4f}")
                 print(f"   最佳夏普: {stats['best_sharpe']:.2f}")
@@ -1543,6 +1682,14 @@ class EvolutionEngine:
 
         # 更新歷史存檔
         self.pareto_mgr.update(pareto_front)
+
+        # 🔥 最終保存 checkpoint
+        checkpoint_mgr.save(
+            population=population,
+            generation=n_generations,
+            pareto_front=pareto_front,
+            history=self.history
+        )
 
         # 輸出結果
         self._print_pareto_front(pareto_front)
