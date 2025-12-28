@@ -651,24 +651,32 @@ def load_historical_elites(top_n=20):
     ]
 
     all_individuals = []
+    total_pkl_found = 0
 
     for search_path in search_paths:
         if not os.path.exists(search_path):
             continue
 
-        print(f"   搜尋: {os.path.basename(search_path)}")
-
         # 搜尋所有 .pkl 檔案
         import glob
         pkl_files = glob.glob(os.path.join(search_path, "**", "*.pkl"), recursive=True)
+
+        if pkl_files:
+            print(f"   搜尋: {os.path.basename(search_path)} (找到 {len(pkl_files)} 個 .pkl)")
+            total_pkl_found += len(pkl_files)
+        else:
+            print(f"   搜尋: {os.path.basename(search_path)} (無 .pkl 檔案)")
 
         for file in pkl_files:
             try:
                 with open(file, 'rb') as f:
                     cp = pickle.load(f)
 
+                file_loaded = 0
+                keys = list(cp.keys()) if isinstance(cp, dict) else []
+
                 # 從 halloffame 載入
-                if "halloffame" in cp and cp["halloffame"]:
+                if isinstance(cp, dict) and "halloffame" in cp and cp["halloffame"]:
                     for ind in cp["halloffame"]:
                         if hasattr(ind, 'fitness') and ind.fitness.valid:
                             fitness = ind.fitness.values[0]
@@ -677,9 +685,10 @@ def load_historical_elites(top_n=20):
                                 'fitness': fitness,
                                 'source': file
                             })
+                            file_loaded += 1
 
                 # 從 population 載入最佳
-                if "population" in cp and cp["population"]:
+                if isinstance(cp, dict) and "population" in cp and cp["population"]:
                     for ind in cp["population"]:
                         if hasattr(ind, 'fitness') and ind.fitness.valid:
                             fitness = ind.fitness.values[0]
@@ -689,9 +698,10 @@ def load_historical_elites(top_n=20):
                                     'fitness': fitness,
                                     'source': file
                                 })
+                                file_loaded += 1
 
                 # 從 best_ever 載入
-                if "best_ever" in cp and cp["best_ever"]:
+                if isinstance(cp, dict) and "best_ever" in cp and cp["best_ever"]:
                     gene = cp["best_ever"]
                     if isinstance(gene, dict):
                         gene = gene.get('gene', gene)
@@ -701,9 +711,31 @@ def load_historical_elites(top_n=20):
                             'fitness': 5.0,  # 假設較高分數
                             'source': file
                         })
+                        file_loaded += 1
+
+                # 嘗試直接載入 gene 欄位
+                if isinstance(cp, dict) and "gene" in cp:
+                    gene = cp["gene"]
+                    if isinstance(gene, list) and len(gene) >= 100:
+                        fitness = cp.get('fitness', cp.get('sharpe', 3.0))
+                        if isinstance(fitness, (int, float)):
+                            all_individuals.append({
+                                'gene': gene,
+                                'fitness': float(fitness),
+                                'source': file
+                            })
+                            file_loaded += 1
+
+                if file_loaded > 0:
+                    print(f"      ✅ {os.path.basename(file)}: 載入 {file_loaded} 個基因")
+                elif keys:
+                    print(f"      ⚠️ {os.path.basename(file)}: keys={keys[:5]}")
 
             except Exception as e:
+                print(f"      ❌ {os.path.basename(file)}: {str(e)[:50]}")
                 continue
+
+    print(f"\n   📊 共搜尋 {total_pkl_found} 個 .pkl，找到 {len(all_individuals)} 個基因")
 
     # 去重並排序
     seen_hashes = set()
