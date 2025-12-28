@@ -618,60 +618,49 @@ print("✅ DEAP GA 配置完成")
 def load_historical_elites(top_n=20):
     """
     從歷史檔案載入最佳基因
-    搜尋多個資料夾中的 checkpoint 檔案
+    使用與成功回測程式完全相同的搜尋邏輯
     """
     print("\n🔍 搜尋歷史精英...")
 
-    # 搜尋路徑（與成功程式完全相同）
-    BASE_SEARCH = '/content/drive/MyDrive/投資策略優化_六策略_修正版_2014'
-    search_paths = [
-        # 修正版資料夾（與成功程式相同）
-        f'{BASE_SEARCH}/window_1',
-        f'{BASE_SEARCH}/window_2',
-        f'{BASE_SEARCH}/window_3',
-        f'{BASE_SEARCH}/shared_best',
-        # 純夏普值適應度版本（這裡有最多 .pkl！）
+    # 使用與成功程式完全相同的路徑定義
+    BASE_PATH = '/content/drive/MyDrive/投資策略優化_六策略_修正版_2014'
+    SEARCH_PATHS = [
+        f'{BASE_PATH}/window_1',
+        f'{BASE_PATH}/window_2',
+        f'{BASE_PATH}/window_3',
+        f'{BASE_PATH}/shared_best',
         '/content/drive/MyDrive/投資策略優化_六策略純夏普值適應度_2014',
         '/content/drive/MyDrive/投資策略優化_六策略純夏普值適應度_2014_分散式',
-        # 十二組合版本
         '/content/drive/MyDrive/十二組合_Calmar_Sortino_優化',
-        # 六策略獨立版
         '/content/drive/MyDrive/投資策略優化_六策略_獨立版/window_1/working',
         '/content/drive/MyDrive/投資策略優化_六策略_獨立版/window_2/working',
         '/content/drive/MyDrive/投資策略優化_六策略_獨立版/window_3/working',
-        # 當前專案目錄（新生成的）
-        f'{BASE_DIR}/window_1',
-        f'{BASE_DIR}/window_2',
-        f'{BASE_DIR}/window_3',
     ]
 
+    # 過濾存在的路徑（與成功程式相同）
+    SEARCH_PATHS = [path for path in SEARCH_PATHS if os.path.exists(path)]
+    print(f"   搜尋範圍: {len(SEARCH_PATHS)} 個資料夾")
+
     all_individuals = []
-    total_pkl_found = 0
+    total_files_found = 0
 
-    # 過濾存在的路徑
-    valid_paths = [p for p in search_paths if os.path.exists(p)]
-    print(f"   搜尋範圍: {len(valid_paths)} 個資料夾")
+    # 完全複製成功程式的搜尋邏輯
+    for search_idx, search_path in enumerate(SEARCH_PATHS, 1):
+        print(f"\n   [{search_idx}/{len(SEARCH_PATHS)}] 搜尋: {os.path.basename(search_path)}")
 
-    for search_idx, search_path in enumerate(valid_paths, 1):
-        # 使用 os.walk 搜尋所有 .pkl 檔案（比 glob 更可靠）
-        pkl_files = []
-        for root, dirs, files in os.walk(search_path):
-            for f in files:
-                if f.endswith('.pkl'):
-                    pkl_files.append(os.path.join(root, f))
+        # 使用與成功程式完全相同的 glob 語法
+        checkpoint_pattern = os.path.join(search_path, "**", "*.pkl")
+        matching_files = glob.glob(checkpoint_pattern, recursive=True)
+        total_files_found += len(matching_files)
+        print(f"       找到 {len(matching_files)} 個 .pkl 檔案")
 
-        if not pkl_files:
-            continue
-
-        total_pkl_found += len(pkl_files)
         files_loaded = 0
-
-        for file in pkl_files:
+        for file in matching_files:
             try:
                 with open(file, 'rb') as f:
                     cp = pickle.load(f)
 
-                # 從 halloffame 載入（與成功程式相同）
+                # 與成功程式相同的載入邏輯
                 if "halloffame" in cp and cp["halloffame"]:
                     for ind in cp["halloffame"]:
                         if hasattr(ind, 'fitness') and ind.fitness.valid:
@@ -683,7 +672,6 @@ def load_historical_elites(top_n=20):
                             })
                             files_loaded += 1
 
-                # 從 population 載入（與成功程式相同）
                 if "population" in cp and cp["population"]:
                     for ind in cp["population"]:
                         if hasattr(ind, 'fitness') and ind.fitness.valid:
@@ -695,13 +683,15 @@ def load_historical_elites(top_n=20):
                                     'source': file
                                 })
                                 files_loaded += 1
-
             except:
                 continue
 
-        print(f"   [{search_idx}/{len(valid_paths)}] {os.path.basename(search_path)}: {len(pkl_files)} 檔案, {files_loaded} 個體")
+        print(f"       成功載入 {files_loaded} 個有效個體")
 
-    print(f"\n   📊 總計: {total_pkl_found} 個 .pkl，{len(all_individuals)} 個基因")
+    print(f"\n📊 搜尋統計：")
+    print(f"   - 搜尋資料夾數: {len(SEARCH_PATHS)}")
+    print(f"   - 找到檔案總數: {total_files_found}")
+    print(f"   - 符合條件: {len(all_individuals)} 個")
 
     # 去重並排序
     seen_hashes = set()
