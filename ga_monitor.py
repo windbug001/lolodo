@@ -38,7 +38,7 @@ PROGRAMS = {
 }
 
 # 刷新間隔（秒）
-REFRESH_INTERVAL = 60
+REFRESH_INTERVAL = 1800  # 30 分鐘
 
 def clear_screen():
     """清除螢幕"""
