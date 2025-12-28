@@ -109,7 +109,7 @@ TAX_RATIO = 3/1000
 FULL_BACKTEST_INTERVAL = 5
 
 print(f"{'='*80}")
-print(f"🚀 六組合快快龍 v12.0 (3視窗交互版) - Window {WINDOW_ID}")
+print(f"🚀 六組合快快龍 v12.1 (3視窗交互+安全寫入版) - Window {WINDOW_ID}")
 print(f"   🎯 目標：夏普 >= {TARGET_SHARPE}, 胃納量 >= {MIN_CAPACITY/1e4:.0f}萬")
 print(f"   🔄 視窗交互：每 {CROSS_WINDOW_INTERVAL} 代交換 Top {CROSS_WINDOW_TOP_N} 基因")
 print(f"{'='*80}")
@@ -305,7 +305,7 @@ class DiscordNotifier:
 
         if self.enabled:
             try:
-                payload = {"content": f"✅ 六組合快快龍 v12.0 (3視窗交互版) - Window {WINDOW_ID} 啟動", "username": "快快龍"}
+                payload = {"content": f"✅ 六組合快快龍 v12.1 (3視窗交互+安全寫入版) - Window {WINDOW_ID} 啟動", "username": "快快龍"}
                 requests.post(self.webhook_url, json=payload, timeout=5)
                 print("✅ Discord 通知系統已連接")
             except:
@@ -1255,7 +1255,7 @@ class EvolutionEngine:
 def main():
     print(f"""
 ╔════════════════════════════════════════════════════════════════════════════╗
-║         六組合快快龍 基因演算法 v12.0 (3視窗交互版)                           ║
+║      六組合快快龍 基因演算法 v12.1 (3視窗交互+安全寫入版)                      ║
 ╠════════════════════════════════════════════════════════════════════════════╣
 ║  🎯 目標：夏普 {TARGET_SHARPE}+, 胃納量 {MIN_CAPACITY/1e4:.0f}萬+, 回檔 {MAX_DRAWDOWN*100:.0f}%以內           ║
 ║  📊 持股：每隻至少 {MIN_POSITION_WEIGHT*100:.0f}%，3% 倍數                                     ║
