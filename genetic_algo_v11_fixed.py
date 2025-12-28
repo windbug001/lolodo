@@ -622,79 +622,53 @@ def load_historical_elites(top_n=20):
     """
     print("\n🔍 搜尋歷史精英...")
 
-    # 搜尋路徑（包含所有歷史資料夾）
+    # 搜尋路徑（與成功程式完全相同）
     BASE_SEARCH = '/content/drive/MyDrive/投資策略優化_六策略_修正版_2014'
     search_paths = [
-        # 當前專案目錄
-        f'{BASE_DIR}/window_1',
-        f'{BASE_DIR}/window_2',
-        f'{BASE_DIR}/window_3',
-        f'{BASE_DIR}/shared_best',
-        # 六策略修正版 2014
+        # 修正版資料夾（與成功程式相同）
         f'{BASE_SEARCH}/window_1',
         f'{BASE_SEARCH}/window_2',
         f'{BASE_SEARCH}/window_3',
         f'{BASE_SEARCH}/shared_best',
-        f'{BASE_SEARCH}/回測結果',
-        # 純夏普值適應度版本
+        # 純夏普值適應度版本（這裡有最多 .pkl！）
         '/content/drive/MyDrive/投資策略優化_六策略純夏普值適應度_2014',
         '/content/drive/MyDrive/投資策略優化_六策略純夏普值適應度_2014_分散式',
-        # 十二組合版本（新增）
+        # 十二組合版本
         '/content/drive/MyDrive/十二組合_Calmar_Sortino_優化',
-        # 六策略獨立版（三個視窗）
+        # 六策略獨立版
         '/content/drive/MyDrive/投資策略優化_六策略_獨立版/window_1/working',
         '/content/drive/MyDrive/投資策略優化_六策略_獨立版/window_2/working',
         '/content/drive/MyDrive/投資策略優化_六策略_獨立版/window_3/working',
-        # 其他版本
-        '/content/drive/MyDrive/投資策略優化_v10.0_終極版',
-        '/content/drive/MyDrive/投資策略優化_v11_六組合快快龍',
+        # 當前專案目錄（新生成的）
+        f'{BASE_DIR}/window_1',
+        f'{BASE_DIR}/window_2',
+        f'{BASE_DIR}/window_3',
     ]
 
     all_individuals = []
     total_pkl_found = 0
 
-    for search_path in search_paths:
-        if not os.path.exists(search_path):
-            print(f"   ❌ 路徑不存在: {search_path}")
-            continue
+    # 過濾存在的路徑
+    valid_paths = [p for p in search_paths if os.path.exists(p)]
+    print(f"   搜尋範圍: {len(valid_paths)} 個資料夾")
 
-        # 搜尋所有 .pkl 檔案（使用與成功程式相同的方式）
+    for search_idx, search_path in enumerate(valid_paths, 1):
+        # 搜尋所有 .pkl 檔案（與成功程式完全相同）
         checkpoint_pattern = os.path.join(search_path, "**", "*.pkl")
         pkl_files = glob.glob(checkpoint_pattern, recursive=True)
 
-        # 如果沒找到，嘗試列出目錄內容
         if not pkl_files:
-            try:
-                all_files = os.listdir(search_path)
-                pkl_in_dir = [f for f in all_files if f.endswith('.pkl')]
-                if pkl_in_dir:
-                    print(f"   搜尋: {os.path.basename(search_path)} - 發現直接 .pkl: {pkl_in_dir[:3]}")
-                    pkl_files = [os.path.join(search_path, f) for f in pkl_in_dir]
-                    total_pkl_found += len(pkl_files)
-                else:
-                    subdirs = [f for f in all_files if os.path.isdir(os.path.join(search_path, f))]
-                    print(f"   搜尋: {os.path.basename(search_path)} (無 .pkl，子目錄: {subdirs[:5]})")
-                    continue
-            except Exception as e:
-                print(f"   ⚠️ 無法讀取 {search_path}: {e}")
-                continue
-
-        if pkl_files:
-            print(f"   搜尋: {os.path.basename(search_path)} (找到 {len(pkl_files)} 個 .pkl)")
-            total_pkl_found += len(pkl_files)
-        else:
-            print(f"   搜尋: {os.path.basename(search_path)} (無 .pkl 檔案)")
             continue
 
-        files_loaded_in_path = 0
+        total_pkl_found += len(pkl_files)
+        files_loaded = 0
+
         for file in pkl_files:
             try:
                 with open(file, 'rb') as f:
                     cp = pickle.load(f)
 
-                file_loaded = 0
-
-                # 從 halloffame 載入（與成功程式相同邏輯）
+                # 從 halloffame 載入（與成功程式相同）
                 if "halloffame" in cp and cp["halloffame"]:
                     for ind in cp["halloffame"]:
                         if hasattr(ind, 'fitness') and ind.fitness.valid:
@@ -704,57 +678,27 @@ def load_historical_elites(top_n=20):
                                 'fitness': fitness,
                                 'source': file
                             })
-                            file_loaded += 1
+                            files_loaded += 1
 
-                # 從 population 載入（與成功程式相同邏輯）
+                # 從 population 載入（與成功程式相同）
                 if "population" in cp and cp["population"]:
                     for ind in cp["population"]:
                         if hasattr(ind, 'fitness') and ind.fitness.valid:
                             fitness = ind.fitness.values[0]
-                            if fitness > 2.0:  # 只取較好的
+                            if fitness > 2.0:
                                 all_individuals.append({
                                     'gene': list(ind),
                                     'fitness': fitness,
                                     'source': file
                                 })
-                                file_loaded += 1
+                                files_loaded += 1
 
-                # 從 best_ever 載入
-                if "best_ever" in cp and cp["best_ever"]:
-                    gene = cp["best_ever"]
-                    if isinstance(gene, dict):
-                        gene = gene.get('gene', gene)
-                    if isinstance(gene, list):
-                        all_individuals.append({
-                            'gene': gene,
-                            'fitness': 5.0,
-                            'source': file
-                        })
-                        file_loaded += 1
-
-                # 嘗試直接載入 gene 欄位
-                if "gene" in cp:
-                    gene = cp["gene"]
-                    if isinstance(gene, list) and len(gene) >= 100:
-                        fitness = cp.get('fitness', cp.get('sharpe', 3.0))
-                        if isinstance(fitness, (int, float)):
-                            all_individuals.append({
-                                'gene': gene,
-                                'fitness': float(fitness),
-                                'source': file
-                            })
-                            file_loaded += 1
-
-                if file_loaded > 0:
-                    files_loaded_in_path += file_loaded
-
-            except Exception as e:
+            except:
                 continue
 
-        if files_loaded_in_path > 0:
-            print(f"      ✅ 成功載入 {files_loaded_in_path} 個有效個體")
+        print(f"   [{search_idx}/{len(valid_paths)}] {os.path.basename(search_path)}: {len(pkl_files)} 檔案, {files_loaded} 個體")
 
-    print(f"\n   📊 共搜尋 {total_pkl_found} 個 .pkl，找到 {len(all_individuals)} 個基因")
+    print(f"\n   📊 總計: {total_pkl_found} 個 .pkl，{len(all_individuals)} 個基因")
 
     # 去重並排序
     seen_hashes = set()
