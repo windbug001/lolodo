@@ -653,9 +653,12 @@ def load_historical_elites(top_n=20):
     print(f"   搜尋範圍: {len(valid_paths)} 個資料夾")
 
     for search_idx, search_path in enumerate(valid_paths, 1):
-        # 搜尋所有 .pkl 檔案（與成功程式完全相同）
-        checkpoint_pattern = os.path.join(search_path, "**", "*.pkl")
-        pkl_files = glob.glob(checkpoint_pattern, recursive=True)
+        # 使用 os.walk 搜尋所有 .pkl 檔案（比 glob 更可靠）
+        pkl_files = []
+        for root, dirs, files in os.walk(search_path):
+            for f in files:
+                if f.endswith('.pkl'):
+                    pkl_files.append(os.path.join(root, f))
 
         if not pkl_files:
             continue
