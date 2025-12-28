@@ -504,8 +504,9 @@ class CrossWindowManager:
 
         injected_count = 0
         for i, ext_elite in enumerate(external_elites[:n_inject]):
-            # 創建新個體
-            new_ind = creator.Individual(ext_elite['gene'])
+            # 🔧 清理基因值（防止複數/NaN導致錯誤）
+            clean_gene = sanitize_gene(ext_elite['gene'])
+            new_ind = creator.Individual(clean_gene)
             new_ind.fitness.values = (ext_elite['fitness'],)
 
             # 替換最差的個體
@@ -1009,6 +1010,32 @@ def load_historical_elites(top_n=20):
     return elites
 
 # =============================================================================
+# 🔧 基因清理函數（防止複數/NaN值導致錯誤）
+# =============================================================================
+def sanitize_gene(gene):
+    """
+    清理基因值，確保都是有效的浮點數 [0, 1]
+    修復 TypeError: '>' not supported between 'float' and 'complex'
+    """
+    sanitized = []
+    for val in gene:
+        try:
+            # 處理複數
+            if isinstance(val, complex):
+                val = abs(val)  # 取絕對值
+            # 轉換為浮點數
+            val = float(val)
+            # 處理 NaN 和 Inf
+            if np.isnan(val) or np.isinf(val):
+                val = random.random()
+            # 限制在 [0, 1] 範圍
+            val = max(0.0, min(1.0, val))
+        except:
+            val = random.random()
+        sanitized.append(val)
+    return sanitized
+
+# =============================================================================
 # 進度追蹤器
 # =============================================================================
 class ProgressTracker:
@@ -1077,12 +1104,14 @@ class EvolutionEngine:
                 print(f"💉 注入 {n_inject} 個歷史精英到初始族群")
 
                 for i, elite_data in enumerate(historical_elites[:n_inject]):
-                    new_ind = creator.Individual(elite_data['gene'])
+                    # 🔧 清理基因值（防止複數/NaN導致錯誤）
+                    clean_gene = sanitize_gene(elite_data['gene'])
+                    new_ind = creator.Individual(clean_gene)
                     new_ind.fitness.values = (elite_data['fitness'],)
                     population[i] = new_ind
 
                 if historical_elites[0]['fitness'] > 0:
-                    self.best_ever = historical_elites[0]['gene']
+                    self.best_ever = sanitize_gene(historical_elites[0]['gene'])
                     print(f"   🏆 最佳歷史基因適應度: {historical_elites[0]['fitness']:.4f}")
 
         print("📊 評估初始族群...")
