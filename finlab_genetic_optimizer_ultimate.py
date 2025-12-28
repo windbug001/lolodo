@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 ================================================================================
-🧬 FinLab 台股基因演算法優化系統 - 終極版
+🧬 FinLab 台股基因演算法優化系統 - 終極版 v1.1
 FinLab Taiwan Stock Genetic Algorithm Optimizer - Ultimate Edition
 ================================================================================
 
@@ -12,6 +12,12 @@ FinLab Taiwan Stock Genetic Algorithm Optimizer - Ultimate Edition
 ✅ 歷史最佳持續進化 (Pareto Archive)
 ✅ Walk-Forward 驗證避免 overfitting
 ✅ 完全遵循 FinLab 原生 API
+
+【v1.1 新增功能】
+✅ 3視窗交互取優秀基因機制
+✅ 安全寫入機制（先暫存再改名）
+✅ 自動備份舊檔案 + 檔案完整性驗證
+✅ Discord 通知功能
 
 【目標】
 - 夏普值：>= 4.0
@@ -25,7 +31,7 @@ FinLab Taiwan Stock Genetic Algorithm Optimizer - Ultimate Edition
 3. 營收股價雙渦輪策略
 4. 動態權重優化
 
-版本：v1.0 Ultimate (2025-12-26)
+版本：v1.1 Safe-Write + CrossWindow (2025-12-28)
 環境：Google Colab Pro+ (CPU + High-RAM)
 ================================================================================
 """
@@ -50,6 +56,8 @@ import time
 import hashlib
 import random
 import itertools
+import shutil
+import requests
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Dict, List, Tuple, Optional, Any
@@ -62,8 +70,11 @@ pd.set_option('display.max_columns', None)
 pd.set_option('future.no_silent_downcasting', True)
 
 # === 🔥 核心設定（請修改）===
-WINDOW_ID = 1  # 🔥 視窗 ID (1-4)，多視窗執行時請修改此值
-FINLAB_API_KEY = "R5XcZHGBZgEO5zz+6e1iYAe3wcFiimTUNaCMKsnZEiM42Wp49xW46MySUZT1W/Ee#vip_m"
+WINDOW_ID = int(os.environ.get('WINDOW_ID', '1'))  # 🔥 視窗 ID (1-4)
+FINLAB_API_KEY = os.environ.get('FINLAB_API_KEY', "R5XcZHGBZgEO5zz+6e1iYAe3wcFiimTUNaCMKsnZEiM42Wp49xW46MySUZT1W/Ee#vip_m")
+
+# Discord 通知設定
+DISCORD_WEBHOOK_URL = "https://discord.com/api/webhooks/1429310065877323796/U8lefLn9F1FhHaRXt8a024gHP5alrnM_mXF8QXfhLiddhpV5AqUpkPEaYNEDLbzuuNdk"
 
 # 優化目標
 TARGET_SHARPE = 4.0
@@ -77,6 +88,11 @@ N_GENERATIONS = 100
 MUTATION_RATE = 0.2
 CROSSOVER_RATE = 0.8
 
+# 🔥 3視窗交互設定
+CROSS_WINDOW_INTERVAL = 10  # 每10代交換一次
+CROSS_WINDOW_TOP_N = 5      # 每次交換最佳5個基因
+ALL_WINDOW_IDS = [1, 2, 3, 4]  # 所有視窗ID
+
 # Walk-Forward 設定
 WALK_FORWARD_WINDOWS = 3  # 3 個時間窗口
 TRAIN_MONTHS = 24         # 訓練期 24 個月
@@ -87,8 +103,9 @@ BACKTEST_START = '2017-01-01'
 BACKTEST_END = None
 
 print(f"=" * 80)
-print(f"🚀 FinLab 台股基因演算法優化系統 v1.0 - 視窗 {WINDOW_ID}")
+print(f"🚀 FinLab 台股基因演算法優化系統 v1.1 (3視窗交互+安全寫入版) - 視窗 {WINDOW_ID}")
 print(f"   🎯 目標：夏普 >= {TARGET_SHARPE}, 胃納量 >= {MIN_CAPACITY/1e7:.0f}00萬")
+print(f"   🔄 視窗交互：每 {CROSS_WINDOW_INTERVAL} 代交換 Top {CROSS_WINDOW_TOP_N} 基因")
 print(f"=" * 80)
 
 # =============================================================================
@@ -233,7 +250,255 @@ class PathManager:
         return f"{self.log_dir}/progress_history.json"
 
 paths = PathManager()
+SHARED_DIR = f"{BASE_DIR}/shared_best"
+Path(SHARED_DIR).mkdir(parents=True, exist_ok=True)
 print(f"📁 工作目錄: {paths.output_dir}")
+print(f"📁 共享目錄: {SHARED_DIR}")
+
+# =============================================================================
+# 🔒 安全檔案管理器 (v1.1 新增)
+# =============================================================================
+class SafeFileManager:
+    """
+    安全的檔案寫入管理器
+    - 使用暫存檔 + 改名的原子性寫入
+    - 自動備份舊檔案
+    - 寫入後驗證完整性
+    """
+
+    @staticmethod
+    def safe_pickle_save(data, filepath, min_size=100):
+        """安全的 pickle 寫入（防止中斷導致損壞）"""
+        temp_path = filepath + '.tmp'
+        backup_path = filepath + '.backup'
+
+        try:
+            # 1. 先寫入暫存檔
+            with open(temp_path, 'wb') as f:
+                pickle.dump(data, f)
+
+            # 2. 驗證暫存檔
+            if not SafeFileManager.verify_pickle_file(temp_path, min_size):
+                if os.path.exists(temp_path):
+                    os.remove(temp_path)
+                return False
+
+            # 3. 備份舊檔案（如果存在且有效）
+            if os.path.exists(filepath):
+                if SafeFileManager.verify_pickle_file(filepath, min_size):
+                    shutil.copy2(filepath, backup_path)
+
+            # 4. 原子性替換
+            shutil.move(temp_path, filepath)
+
+            # 5. 最終驗證
+            if SafeFileManager.verify_pickle_file(filepath, min_size):
+                return True
+            else:
+                if os.path.exists(backup_path):
+                    shutil.copy2(backup_path, filepath)
+                return False
+
+        except Exception as e:
+            if os.path.exists(temp_path):
+                try:
+                    os.remove(temp_path)
+                except:
+                    pass
+            if os.path.exists(backup_path) and not os.path.exists(filepath):
+                try:
+                    shutil.copy2(backup_path, filepath)
+                except:
+                    pass
+            return False
+
+    @staticmethod
+    def verify_pickle_file(filepath, min_size=100):
+        """驗證 pkl 檔案是否正常"""
+        try:
+            if not os.path.exists(filepath):
+                return False
+            size = os.path.getsize(filepath)
+            if size < min_size:
+                return False
+            with open(filepath, 'rb') as f:
+                data = pickle.load(f)
+            return True
+        except:
+            return False
+
+    @staticmethod
+    def safe_json_save(data, filepath):
+        """安全的 JSON 寫入"""
+        temp_path = filepath + '.tmp'
+        try:
+            with open(temp_path, 'w', encoding='utf-8') as f:
+                json.dump(data, f, ensure_ascii=False, indent=2)
+            shutil.move(temp_path, filepath)
+            return True
+        except:
+            if os.path.exists(temp_path):
+                os.remove(temp_path)
+            return False
+
+print("✅ 安全檔案管理器已初始化")
+
+# =============================================================================
+# Discord 通知 (v1.1 新增)
+# =============================================================================
+class DiscordNotifier:
+    def __init__(self, webhook_url=None):
+        self.enabled = webhook_url and webhook_url != ""
+        self.webhook_url = webhook_url
+
+        if self.enabled:
+            try:
+                payload = {"content": f"✅ 小小龍 v1.1 (3視窗交互+安全寫入版) - 視窗 {WINDOW_ID} 啟動", "username": "小小龍"}
+                requests.post(self.webhook_url, json=payload, timeout=5)
+                print("✅ Discord 通知系統已連接")
+            except:
+                self.enabled = False
+
+    def send(self, message):
+        if not self.enabled:
+            return
+        try:
+            payload = {"content": message, "username": "小小龍"}
+            requests.post(self.webhook_url, json=payload, timeout=5)
+            time.sleep(1)
+        except:
+            pass
+
+    def send_embed(self, title, description, color='info', fields=None):
+        if not self.enabled:
+            return
+        try:
+            color_map = {'success': 3066993, 'error': 15158332, 'warning': 16776960, 'info': 3447003}
+            embed = {"title": title, "description": description, "color": color_map.get(color, 3447003)}
+            if fields:
+                embed["fields"] = fields
+            payload = {"embeds": [embed], "username": "小小龍"}
+            requests.post(self.webhook_url, json=payload, timeout=5)
+            time.sleep(1)
+        except:
+            pass
+
+notifier = DiscordNotifier(DISCORD_WEBHOOK_URL)
+
+# =============================================================================
+# 🔥 3視窗交互機制 (v1.1 新增)
+# =============================================================================
+class CrossWindowManager:
+    """3視窗交互管理器"""
+
+    def __init__(self, base_dir, window_id, shared_dir):
+        self.base_dir = base_dir
+        self.window_id = window_id
+        self.shared_dir = shared_dir
+        self.other_windows = [w for w in ALL_WINDOW_IDS if w != window_id]
+        Path(shared_dir).mkdir(parents=True, exist_ok=True)
+
+    def save_elites_to_shared(self, elites: List, generation: int):
+        """將本視窗的精英基因保存到共享資料夾"""
+        try:
+            elite_data = {
+                'window_id': self.window_id,
+                'generation': generation,
+                'timestamp': datetime.now().isoformat(),
+                'elites': []
+            }
+
+            for ind in elites:
+                elite_data['elites'].append({
+                    'gene': list(ind),
+                    'fitness': ind.fitness.values[0] if ind.fitness.valid else 0.0
+                })
+
+            filename = f"{self.shared_dir}/window_{self.window_id}_elites.pkl"
+            success = SafeFileManager.safe_pickle_save(elite_data, filename)
+
+            if success:
+                print(f"   💾 視窗 {self.window_id} 精英已安全保存到共享區 ({len(elites)} 個)")
+                return True
+            else:
+                with open(filename, 'wb') as f:
+                    pickle.dump(elite_data, f)
+                return True
+
+        except Exception as e:
+            print(f"   ⚠️ 保存精英失敗: {e}")
+            return False
+
+    def load_elites_from_other_windows(self, max_per_window: int = CROSS_WINDOW_TOP_N) -> List[Dict]:
+        """從其他視窗載入精英基因"""
+        all_external_elites = []
+
+        for other_window in self.other_windows:
+            try:
+                filename = f"{self.shared_dir}/window_{other_window}_elites.pkl"
+                if not os.path.exists(filename):
+                    continue
+
+                file_age = time.time() - os.path.getmtime(filename)
+                if file_age > 86400:
+                    continue
+
+                with open(filename, 'rb') as f:
+                    data = pickle.load(f)
+
+                elites = data.get('elites', [])[:max_per_window]
+                for elite in elites:
+                    all_external_elites.append({
+                        'gene': elite['gene'],
+                        'fitness': elite['fitness'],
+                        'source_window': other_window,
+                        'generation': data.get('generation', 0)
+                    })
+
+                print(f"   📥 從視窗 {other_window} 載入 {len(elites)} 個精英")
+
+            except Exception as e:
+                continue
+
+        all_external_elites.sort(key=lambda x: x['fitness'], reverse=True)
+        return all_external_elites
+
+    def perform_cross_window_exchange(self, population: List, generation: int, toolbox) -> List:
+        """執行跨視窗基因交換"""
+        print(f"\n🔄 第 {generation} 代 - 執行3視窗基因交換")
+
+        local_elites = tools.selBest(population, CROSS_WINDOW_TOP_N)
+        self.save_elites_to_shared(local_elites, generation)
+
+        external_elites = self.load_elites_from_other_windows()
+
+        if not external_elites:
+            print("   ℹ️ 暫無其他視窗精英可用")
+            return population
+
+        n_inject = min(len(external_elites), len(population) // 4)
+        population.sort(key=lambda x: x.fitness.values[0] if x.fitness.valid else 0)
+
+        injected_count = 0
+        for i, ext_elite in enumerate(external_elites[:n_inject]):
+            new_ind = toolbox.individual_from_gene(ext_elite['gene'])
+            new_ind.fitness.values = (ext_elite['fitness'],)
+            population[i] = new_ind
+            injected_count += 1
+
+        print(f"   ✅ 注入 {injected_count} 個外部精英")
+
+        notifier.send(
+            f"🔄 **視窗 {self.window_id} 基因交換**\n"
+            f"• 第 {generation} 代\n"
+            f"• 注入 {injected_count} 個外部精英\n"
+            f"• 最佳外部適應度: {external_elites[0]['fitness']:.4f}"
+        )
+
+        return population
+
+cross_window_mgr = CrossWindowManager(BASE_DIR, WINDOW_ID, SHARED_DIR)
+print("✅ 3視窗交互管理器已初始化")
 
 # =============================================================================
 # 第四部分：數據載入（使用 FinLab API）
@@ -1024,6 +1289,14 @@ toolbox.register("mutate", tools.mutPolynomialBounded,
                  low=0.0, up=1.0, eta=20.0, indpb=0.05)
 toolbox.register("select", tools.selNSGA2)
 
+# 🔥 新增：從基因列表創建個體（用於跨視窗交換）
+def create_individual_from_gene(gene_list):
+    """從基因列表創建 DEAP Individual"""
+    ind = creator.Individual(gene_list)
+    return ind
+
+toolbox.register("individual_from_gene", create_individual_from_gene)
+
 print("✅ DEAP NSGA-II 配置完成")
 
 # =============================================================================
@@ -1084,13 +1357,17 @@ class ParetoArchiveManager:
         return unique
 
     def _save(self):
-        """保存"""
+        """保存（使用安全寫入）"""
         try:
-            with open(self.archive_file, 'wb') as f:
-                pickle.dump({
-                    'individuals': self.archive,
-                    'timestamp': datetime.now().isoformat(),
-                }, f)
+            save_data = {
+                'individuals': self.archive,
+                'timestamp': datetime.now().isoformat(),
+            }
+            success = SafeFileManager.safe_pickle_save(save_data, self.archive_file)
+            if not success:
+                # 降級到傳統寫入
+                with open(self.archive_file, 'wb') as f:
+                    pickle.dump(save_data, f)
         except Exception as e:
             print(f"⚠️ 歷史保存失敗: {e}")
 
@@ -1221,6 +1498,14 @@ class EvolutionEngine:
             self.history.append(stats)
 
             elapsed = time.time() - start_time
+
+            # 🔥 3視窗交互 - 每 CROSS_WINDOW_INTERVAL 代執行
+            if (gen + 1) % CROSS_WINDOW_INTERVAL == 0:
+                population = cross_window_mgr.perform_cross_window_exchange(
+                    population, gen + 1, self.toolbox
+                )
+                # 重新評估新注入的個體
+                population = self._evaluate_population(population)
 
             # 輸出
             if (gen + 1) % 5 == 0 or gen == 0:
@@ -1377,6 +1662,22 @@ def main():
     print(f"\n✅ 優化完成！")
     print(f"📁 結果保存於: {paths.output_dir}")
     print(f"📁 Pareto 存檔: {paths.pareto_archive}")
+
+    # 🔥 最終結果保存到共享區
+    if pareto_front:
+        cross_window_mgr.save_elites_to_shared(
+            tools.selBest(pareto_front, CROSS_WINDOW_TOP_N),
+            N_GENERATIONS
+        )
+
+    # 🔥 Discord 通知完成
+    notifier.send_embed(
+        f"🎉 視窗 {WINDOW_ID} 演化完成",
+        f"共 {N_GENERATIONS} 代演化\n"
+        f"Pareto 前緣數量: {len(pareto_front) if pareto_front else 0}\n"
+        f"結果已保存至共享區",
+        'success'
+    )
 
     return population, pareto_front
 
