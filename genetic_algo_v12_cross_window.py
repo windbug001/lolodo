@@ -2,8 +2,8 @@
 # -*- coding: utf-8 -*-
 """
 ================================================================================
-🧬 六組合快快龍 基因演算法優化系統 v12.1 (3視窗交互+安全寫入版)
-   新增：3視窗交互取優秀基因功能 + 檔案安全防護
+🧬 六組合快快龍 基因演算法優化系統 v12.2 (樣本外測試版)
+   新增：樣本外測試 (Out-of-Sample Testing) 防過擬合機制
 ================================================================================
 
 【v12.0 新增功能】
@@ -18,7 +18,14 @@
 ✅ 檔案完整性驗證
 ✅ 防止中斷導致檔案損壞
 
-版本：v12.1 Safe-Write (2025-12-28)
+【v12.2 新增功能 - 樣本外測試】
+✅ 訓練期/測試期分離 (2014~2022 訓練, 2023~2025 測試)
+✅ 適應度評估僅使用訓練期數據
+✅ 每5代顯示訓練期 vs 測試期夏普比較
+✅ 自動過擬合警告（測試/訓練比 < 60%）
+✅ 最終報告包含完整樣本外測試結果
+
+版本：v12.2 OOS-Test (2025-12-28)
 ================================================================================
 """
 
@@ -108,10 +115,24 @@ FEE_RATIO = 1.425/1000
 TAX_RATIO = 3/1000
 FULL_BACKTEST_INTERVAL = 5
 
+# =============================================================================
+# 🔬 樣本外測試設定 (Out-of-Sample Testing)
+# =============================================================================
+TRAIN_START = '2014-01-01'   # 訓練期開始
+TRAIN_END = '2022-12-31'     # 訓練期結束
+TEST_START = '2023-01-01'    # 測試期開始
+TEST_END = '2025-12-31'      # 測試期結束（或使用最新日期）
+
+# 過擬合警告閾值
+OVERFIT_SHARPE_RATIO = 0.6   # 測試期夏普 / 訓練期夏普 < 0.6 則警告
+OVERFIT_RETURN_RATIO = 0.5   # 測試期報酬 / 訓練期報酬 < 0.5 則警告
+
 print(f"{'='*80}")
-print(f"🚀 六組合快快龍 v12.1 (3視窗交互+安全寫入版) - Window {WINDOW_ID}")
+print(f"🚀 六組合快快龍 v12.2 (樣本外測試版) - Window {WINDOW_ID}")
 print(f"   🎯 目標：夏普 >= {TARGET_SHARPE}, 胃納量 >= {MIN_CAPACITY/1e4:.0f}萬")
 print(f"   🔄 視窗交互：每 {CROSS_WINDOW_INTERVAL} 代交換 Top {CROSS_WINDOW_TOP_N} 基因")
+print(f"   📊 訓練期：{TRAIN_START} ~ {TRAIN_END}")
+print(f"   🔬 測試期：{TEST_START} ~ {TEST_END}")
 print(f"{'='*80}")
 
 # =============================================================================
@@ -781,7 +802,16 @@ def normalize_weights(position_df):
 # =============================================================================
 # 合併策略
 # =============================================================================
-def combined_strategy(gene, apply_normalization=True):
+def combined_strategy(gene, apply_normalization=True, start_date=None, end_date=None):
+    """
+    合併六個策略並生成持倉
+
+    Args:
+        gene: 基因向量
+        apply_normalization: 是否正規化權重
+        start_date: 開始日期 (用於樣本外測試)
+        end_date: 結束日期 (用於樣本外測試)
+    """
     try:
         allocation, p1, p2, p3, p4, p5, p6, overall = gene_to_params(gene)
 
@@ -800,7 +830,13 @@ def combined_strategy(gene, apply_normalization=True):
         if not isinstance(combined.index, pd.DatetimeIndex):
             combined.index = pd.to_datetime(combined.index, errors='coerce')
 
-        combined = combined[combined.index >= pd.Timestamp(BACKTEST_START)]
+        # 使用指定日期或預設值
+        filter_start = start_date if start_date else BACKTEST_START
+        combined = combined[combined.index >= pd.Timestamp(filter_start)]
+
+        # 如果有結束日期，過濾結束日期
+        if end_date:
+            combined = combined[combined.index <= pd.Timestamp(end_date)]
 
         if apply_normalization and not combined.empty:
             combined = normalize_weights(combined)
@@ -817,6 +853,7 @@ def combined_strategy(gene, apply_normalization=True):
 # 回測
 # =============================================================================
 def run_backtest(gene, upload=False, name="Strategy"):
+    """完整期間回測（用於最終結果）"""
     try:
         position, params = combined_strategy(gene)
         if position.empty or position.sum().sum() == 0:
@@ -854,9 +891,127 @@ def run_backtest(gene, upload=False, name="Strategy"):
         print(f"   ⚠️ 回測錯誤: {e}")
         return None
 
-def evaluate_fitness(gene):
+
+def run_backtest_period(gene, start_date, end_date, name="Strategy"):
+    """
+    🔬 指定期間回測（用於樣本外測試）
+
+    Args:
+        gene: 基因向量
+        start_date: 開始日期
+        end_date: 結束日期
+        name: 策略名稱
+    """
     try:
-        position, params = combined_strategy(gene)
+        position, params = combined_strategy(gene, start_date=start_date, end_date=end_date)
+        if position.empty or position.sum().sum() == 0:
+            return None
+
+        report = sim(
+            position=position,
+            stop_loss=params.get('stop_loss', 0.1),
+            trail_stop=params.get('trail_stop', 0.05),
+            fee_ratio=FEE_RATIO,
+            tax_ratio=TAX_RATIO,
+            trade_at_price=params.get('trade_at_price', 'close'),
+            position_limit=params.get('position_limit', 0.3),
+            take_profit=params.get('take_profit', 0.3),
+            name=name,
+            upload=False
+        )
+
+        if report is None:
+            return None
+
+        metrics = report.get_metrics()
+        return {
+            'sharpe': metrics['ratio'].get('sharpeRatio', 0) or 0,
+            'sortino': metrics['ratio'].get('sortinoRatio', 0) or 0,
+            'calmar': metrics['ratio'].get('calmarRatio', 0) or 0,
+            'annual_return': metrics['profitability'].get('annualReturn', 0) or 0,
+            'max_drawdown': abs(metrics['risk'].get('maxDrawdown', 1)),
+            'capacity': metrics['liquidity'].get('capacity', 0) or 0,
+            'period': f"{start_date} ~ {end_date}",
+            'position': position,
+            'gene': gene
+        }
+    except Exception as e:
+        return None
+
+
+def run_oos_test(gene, name="OOS_Test"):
+    """
+    🔬 執行樣本外測試（同時回測訓練期和測試期）
+
+    Returns:
+        dict: 包含 train_result, test_result, overfit_warning
+    """
+    # 訓練期回測
+    train_result = run_backtest_period(gene, TRAIN_START, TRAIN_END, f"{name}_Train")
+
+    # 測試期回測
+    test_result = run_backtest_period(gene, TEST_START, TEST_END, f"{name}_Test")
+
+    if train_result is None or test_result is None:
+        return None
+
+    # 計算過擬合指標
+    sharpe_ratio = test_result['sharpe'] / train_result['sharpe'] if train_result['sharpe'] > 0 else 0
+    return_ratio = test_result['annual_return'] / train_result['annual_return'] if train_result['annual_return'] > 0 else 0
+
+    # 過擬合警告
+    overfit_warnings = []
+    if sharpe_ratio < OVERFIT_SHARPE_RATIO and train_result['sharpe'] > 1.0:
+        overfit_warnings.append(f"⚠️ 夏普衰減嚴重: {sharpe_ratio:.1%} (測試/訓練)")
+    if return_ratio < OVERFIT_RETURN_RATIO and train_result['annual_return'] > 0.2:
+        overfit_warnings.append(f"⚠️ 報酬衰減嚴重: {return_ratio:.1%} (測試/訓練)")
+
+    return {
+        'train': train_result,
+        'test': test_result,
+        'sharpe_ratio': sharpe_ratio,
+        'return_ratio': return_ratio,
+        'overfit_warnings': overfit_warnings,
+        'is_overfit': len(overfit_warnings) > 0
+    }
+
+
+def print_oos_comparison(oos_result):
+    """打印樣本外測試比較結果"""
+    if oos_result is None:
+        print("   ⚠️ 樣本外測試失敗")
+        return
+
+    train = oos_result['train']
+    test = oos_result['test']
+
+    print(f"\n   {'─'*50}")
+    print(f"   📊 樣本外測試結果比較")
+    print(f"   {'─'*50}")
+    print(f"   {'指標':<12} {'訓練期':>12} {'測試期':>12} {'比率':>10}")
+    print(f"   {'':<12} {'('+TRAIN_START[:4]+'~'+TRAIN_END[:4]+')':>12} {'('+TEST_START[:4]+'~'+TEST_END[:4]+')':>12}")
+    print(f"   {'─'*50}")
+    print(f"   {'夏普值':<10} {train['sharpe']:>12.3f} {test['sharpe']:>12.3f} {oos_result['sharpe_ratio']:>9.1%}")
+    print(f"   {'年化報酬':<10} {train['annual_return']*100:>11.1f}% {test['annual_return']*100:>11.1f}% {oos_result['return_ratio']:>9.1%}")
+    print(f"   {'最大回檔':<10} {train['max_drawdown']*100:>11.1f}% {test['max_drawdown']*100:>11.1f}%")
+    print(f"   {'胃納量(萬)':<10} {train['capacity']/1e4:>12.0f} {test['capacity']/1e4:>12.0f}")
+    print(f"   {'─'*50}")
+
+    if oos_result['is_overfit']:
+        print(f"   🔴 過擬合警告:")
+        for warning in oos_result['overfit_warnings']:
+            print(f"      {warning}")
+    else:
+        print(f"   🟢 通過樣本外測試！測試期表現穩定")
+
+
+def evaluate_fitness(gene):
+    """
+    適應度評估（僅使用訓練期數據，防止過擬合）
+    """
+    try:
+        # 🔬 只使用訓練期數據進行評估
+        position, params = combined_strategy(gene, start_date=TRAIN_START, end_date=TRAIN_END)
         if position.empty:
             return (0.0,)
 
@@ -1161,23 +1316,38 @@ class EvolutionEngine:
                     if not ind.fitness.valid:
                         ind.fitness.values = toolbox.evaluate(ind)
 
-            # 每 5 代完整回測
+            # 每 5 代完整回測 + 樣本外測試
             if (gen + 1) % FULL_BACKTEST_INTERVAL == 0:
-                print(f"\n📊 第 {gen+1} 代 - 完整回測...")
-                result = run_backtest(best_ind, upload=False, name=f"Gen{gen+1}")
+                print(f"\n📊 第 {gen+1} 代 - 樣本外測試...")
 
-                if result:
-                    is_best = self.best_metrics is None or result['sharpe'] > self.best_metrics.get('sharpe', 0)
+                # 🔬 執行樣本外測試
+                oos_result = run_oos_test(best_ind, name=f"Gen{gen+1}")
+
+                if oos_result:
+                    train_sharpe = oos_result['train']['sharpe']
+                    test_sharpe = oos_result['test']['sharpe']
+
+                    is_best = self.best_metrics is None or train_sharpe > self.best_metrics.get('sharpe', 0)
 
                     if is_best:
                         self.best_ever = list(best_ind)
-                        self.best_metrics = result
-                        print(f"   🏆 新最佳! 夏普:{result['sharpe']:.4f} 胃納:{result['capacity']/1e4:.1f}萬")
+                        self.best_metrics = oos_result['train']
+                        self.best_metrics['test_sharpe'] = test_sharpe
+                        self.best_metrics['sharpe_ratio'] = oos_result['sharpe_ratio']
+
+                        # 顯示訓練期 vs 測試期
+                        overfit_flag = "🔴" if oos_result['is_overfit'] else "🟢"
+                        print(f"   🏆 新最佳!")
+                        print(f"      訓練期({TRAIN_START[:4]}~{TRAIN_END[:4]}): 夏普 {train_sharpe:.3f}")
+                        print(f"      測試期({TEST_START[:4]}~{TEST_END[:4]}): 夏普 {test_sharpe:.3f} {overfit_flag}")
+                        print(f"      測試/訓練比: {oos_result['sharpe_ratio']:.1%}")
 
                         notifier.send_embed(
                             f"🏆 Window {WINDOW_ID} 新最佳",
-                            f"夏普: {result['sharpe']:.4f}\n胃納: {result['capacity']/1e4:.1f}萬",
-                            'success'
+                            f"訓練期夏普: {train_sharpe:.3f}\n"
+                            f"測試期夏普: {test_sharpe:.3f}\n"
+                            f"比率: {oos_result['sharpe_ratio']:.1%} {overfit_flag}",
+                            'success' if not oos_result['is_overfit'] else 'warning'
                         )
 
             # 每 20 代發送進度 + 顯示各視窗狀態
@@ -1190,26 +1360,66 @@ class EvolutionEngine:
 
         total_time = progress.close()
 
-        # 最終回測
+        # 最終回測 + 樣本外測試
         print(f"\n{'='*80}")
-        print("📊 最終回測...")
+        print("📊 最終回測 + 樣本外測試...")
 
         final_best = tools.selBest(population, 1)[0]
+
+        # 🔬 執行最終樣本外測試
+        final_oos = run_oos_test(final_best, name=f"GA_v12_W{WINDOW_ID}_Final")
+
+        # 同時上傳完整期間的回測
         final_result = run_backtest(final_best, upload=True, name=f"GA_v12_W{WINDOW_ID}_Final")
 
-        if final_result:
-            print(f"\n🏆 最終結果:")
+        if final_oos:
+            print(f"\n{'='*60}")
+            print(f"🏆 最終結果 - 樣本外測試")
+            print(f"{'='*60}")
+
+            # 打印樣本外比較表
+            print_oos_comparison(final_oos)
+
+            print(f"\n📈 完整期間回測:")
+            if final_result:
+                print(f"   夏普值: {final_result['sharpe']:.4f}")
+                print(f"   年化報酬: {final_result['annual_return']*100:.1f}%")
+                print(f"   最大回檔: {final_result['max_drawdown']*100:.1f}%")
+                print(f"   胃納量: {final_result['capacity']/1e4:.1f}萬")
+
+            print(f"\n🔍 持股配比:")
+            if final_result:
+                last_pos = final_result['position'].iloc[-1]
+                non_zero = last_pos[last_pos > 0].sort_values(ascending=False)
+                print(f"   持股數: {len(non_zero)}")
+                for stock, weight in non_zero.head(10).items():
+                    print(f"   {stock}: {weight*100:.1f}%")
+
+            # Discord 通知包含過擬合資訊
+            overfit_status = "🔴 過擬合警告" if final_oos['is_overfit'] else "🟢 測試通過"
+            notifier.send_embed(
+                f"🎉 Window {WINDOW_ID} 演化完成",
+                f"總耗時: {total_time/60:.1f}分鐘\n"
+                f"{'─'*20}\n"
+                f"📊 訓練期({TRAIN_START[:4]}~{TRAIN_END[:4]}):\n"
+                f"  夏普: {final_oos['train']['sharpe']:.3f}\n"
+                f"  年化: {final_oos['train']['annual_return']*100:.1f}%\n"
+                f"{'─'*20}\n"
+                f"🔬 測試期({TEST_START[:4]}~{TEST_END[:4]}):\n"
+                f"  夏普: {final_oos['test']['sharpe']:.3f}\n"
+                f"  年化: {final_oos['test']['annual_return']*100:.1f}%\n"
+                f"{'─'*20}\n"
+                f"測試/訓練比: {final_oos['sharpe_ratio']:.1%}\n"
+                f"{overfit_status}",
+                'success' if not final_oos['is_overfit'] else 'warning'
+            )
+        elif final_result:
+            # 如果樣本外測試失敗，至少顯示完整期間結果
+            print(f"\n🏆 最終結果 (完整期間):")
             print(f"   夏普值: {final_result['sharpe']:.4f}")
             print(f"   年化報酬: {final_result['annual_return']*100:.1f}%")
             print(f"   最大回檔: {final_result['max_drawdown']*100:.1f}%")
             print(f"   胃納量: {final_result['capacity']/1e4:.1f}萬")
-
-            print(f"\n🔍 持股配比:")
-            last_pos = final_result['position'].iloc[-1]
-            non_zero = last_pos[last_pos > 0].sort_values(ascending=False)
-            print(f"   持股數: {len(non_zero)}")
-            for stock, weight in non_zero.head(10).items():
-                print(f"   {stock}: {weight*100:.1f}%")
 
             notifier.send_embed(
                 f"🎉 Window {WINDOW_ID} 演化完成",
@@ -1284,10 +1494,11 @@ class EvolutionEngine:
 def main():
     print(f"""
 ╔════════════════════════════════════════════════════════════════════════════╗
-║      六組合快快龍 基因演算法 v12.1 (3視窗交互+安全寫入版)                      ║
+║      六組合快快龍 基因演算法 v12.2 (樣本外測試版)                              ║
 ╠════════════════════════════════════════════════════════════════════════════╣
 ║  🎯 目標：夏普 {TARGET_SHARPE}+, 胃納量 {MIN_CAPACITY/1e4:.0f}萬+, 回檔 {MAX_DRAWDOWN*100:.0f}%以內           ║
-║  📊 持股：每隻至少 {MIN_POSITION_WEIGHT*100:.0f}%，3% 倍數                                     ║
+║  📊 訓練期：{TRAIN_START} ~ {TRAIN_END}  (用於演化優化)                  ║
+║  🔬 測試期：{TEST_START} ~ {TEST_END}  (用於過擬合檢測)                  ║
 ║  🔄 3視窗交互：每 {CROSS_WINDOW_INTERVAL} 代交換 Top {CROSS_WINDOW_TOP_N} 精英                              ║
 ║  📁 共享區：{SHARED_DIR[-40:]:40s} ║
 ╚════════════════════════════════════════════════════════════════════════════╝
