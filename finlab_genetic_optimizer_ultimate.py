@@ -21,7 +21,7 @@ FinLab Taiwan Stock Genetic Algorithm Optimizer - Ultimate Edition
 
 【目標】
 - 夏普值：>= 4.0
-- 胃納量：>= 1000 萬
+- 胃納量：>= 500 萬
 - 年化報酬：最大化
 - 最大回撤：< 20%
 
@@ -78,7 +78,7 @@ DISCORD_WEBHOOK_URL = "https://discord.com/api/webhooks/1429310065877323796/U8le
 
 # 優化目標
 TARGET_SHARPE = 4.0
-MIN_CAPACITY = 10_000_000  # 1000萬
+MIN_CAPACITY = 5_000_000  # 500萬
 TARGET_ANNUAL_RETURN = 0.3
 MAX_DRAWDOWN = 0.2
 
@@ -104,7 +104,7 @@ BACKTEST_END = None
 
 print(f"=" * 80)
 print(f"🚀 FinLab 台股基因演算法優化系統 v1.1 (3視窗交互+安全寫入版) - 視窗 {WINDOW_ID}")
-print(f"   🎯 目標：夏普 >= {TARGET_SHARPE}, 胃納量 >= {MIN_CAPACITY/1e7:.0f}00萬")
+print(f"   🎯 目標：夏普 >= {TARGET_SHARPE}, 胃納量 >= {MIN_CAPACITY/1e4:.0f}萬")
 print(f"   🔄 視窗交互：每 {CROSS_WINDOW_INTERVAL} 代交換 Top {CROSS_WINDOW_TOP_N} 基因")
 print(f"=" * 80)
 
@@ -1772,7 +1772,7 @@ def main():
 ║     FinLab 台股基因演算法優化系統 - 終極版                      ║
 ║     NSGA-II + Walk-Forward + Pareto Archive                   ║
 ╠════════════════════════════════════════════════════════════════╣
-║  🎯 目標：夏普 {TARGET_SHARPE}+, 胃納量 {MIN_CAPACITY/1e7:.0f}00萬+                        ║
+║  🎯 目標：夏普 {TARGET_SHARPE}+, 胃納量 {MIN_CAPACITY/1e4:.0f}萬+                          ║
 ║  📊 策略：三策略動態組合優化                                     ║
 ║  🔬 驗證：Walk-Forward ({WALK_FORWARD_WINDOWS} 窗口)                             ║
 ║  🧬 基因：{GeneDecoder.GENE_LENGTH} 個參數                                        ║
