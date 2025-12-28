@@ -257,7 +257,9 @@ def print_dashboard(results):
 def monitor_loop():
     """監控主迴圈"""
     print("🚀 啟動 GA 優化監控中心...")
-    print(f"📁 監控路徑: {BASE_DIR}")
+    print("📁 監控路徑:")
+    for name, config in PROGRAMS.items():
+        print(f"   • {name}: {config['base_dir']}")
     print()
 
     try:
