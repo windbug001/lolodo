@@ -655,11 +655,29 @@ def load_historical_elites(top_n=20):
 
     for search_path in search_paths:
         if not os.path.exists(search_path):
+            print(f"   ❌ 路徑不存在: {search_path}")
             continue
 
         # 搜尋所有 .pkl 檔案（使用與成功程式相同的方式）
         checkpoint_pattern = os.path.join(search_path, "**", "*.pkl")
         pkl_files = glob.glob(checkpoint_pattern, recursive=True)
+
+        # 如果沒找到，嘗試列出目錄內容
+        if not pkl_files:
+            try:
+                all_files = os.listdir(search_path)
+                pkl_in_dir = [f for f in all_files if f.endswith('.pkl')]
+                if pkl_in_dir:
+                    print(f"   搜尋: {os.path.basename(search_path)} - 發現直接 .pkl: {pkl_in_dir[:3]}")
+                    pkl_files = [os.path.join(search_path, f) for f in pkl_in_dir]
+                    total_pkl_found += len(pkl_files)
+                else:
+                    subdirs = [f for f in all_files if os.path.isdir(os.path.join(search_path, f))]
+                    print(f"   搜尋: {os.path.basename(search_path)} (無 .pkl，子目錄: {subdirs[:5]})")
+                    continue
+            except Exception as e:
+                print(f"   ⚠️ 無法讀取 {search_path}: {e}")
+                continue
 
         if pkl_files:
             print(f"   搜尋: {os.path.basename(search_path)} (找到 {len(pkl_files)} 個 .pkl)")
