@@ -620,19 +620,30 @@ def load_historical_elites(top_n=20):
     """
     print("\n🔍 搜尋歷史精英...")
 
-    # 搜尋路徑
+    # 搜尋路徑（包含所有歷史資料夾）
+    BASE_SEARCH = '/content/drive/MyDrive/投資策略優化_六策略_修正版_2014'
     search_paths = [
+        # 當前專案目錄
         f'{BASE_DIR}/window_1',
         f'{BASE_DIR}/window_2',
         f'{BASE_DIR}/window_3',
         f'{BASE_DIR}/shared_best',
-        '/content/drive/MyDrive/投資策略優化_六策略_修正版_2014/window_1',
-        '/content/drive/MyDrive/投資策略優化_六策略_修正版_2014/window_2',
-        '/content/drive/MyDrive/投資策略優化_六策略_修正版_2014/shared_best',
+        # 六策略修正版 2014
+        f'{BASE_SEARCH}/window_1',
+        f'{BASE_SEARCH}/window_2',
+        f'{BASE_SEARCH}/window_3',
+        f'{BASE_SEARCH}/shared_best',
+        f'{BASE_SEARCH}/回測結果',
+        # 純夏普值適應度版本
         '/content/drive/MyDrive/投資策略優化_六策略純夏普值適應度_2014',
         '/content/drive/MyDrive/投資策略優化_六策略純夏普值適應度_2014_分散式',
+        # 十二組合版本（新增）
+        '/content/drive/MyDrive/十二組合_Calmar_Sortino_優化',
+        # 六策略獨立版（三個視窗）
         '/content/drive/MyDrive/投資策略優化_六策略_獨立版/window_1/working',
         '/content/drive/MyDrive/投資策略優化_六策略_獨立版/window_2/working',
+        '/content/drive/MyDrive/投資策略優化_六策略_獨立版/window_3/working',
+        # 其他版本
         '/content/drive/MyDrive/投資策略優化_v10.0_終極版',
         '/content/drive/MyDrive/投資策略優化_v11_六組合快快龍',
     ]
