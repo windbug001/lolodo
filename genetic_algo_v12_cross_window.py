@@ -2,8 +2,8 @@
 # -*- coding: utf-8 -*-
 """
 ================================================================================
-🧬 六組合快快龍 基因演算法優化系統 v12.0 (3視窗交互版)
-   新增：3視窗交互取優秀基因功能
+🧬 六組合快快龍 基因演算法優化系統 v12.1 (3視窗交互+安全寫入版)
+   新增：3視窗交互取優秀基因功能 + 檔案安全防護
 ================================================================================
 
 【v12.0 新增功能】
@@ -12,7 +12,13 @@
 ✅ 每N代自動交換各視窗精英
 ✅ 跨視窗基因多樣性維護
 
-版本：v12.0 Cross-Window (2025-12-28)
+【v12.1 新增功能 - 安全防護】
+✅ 安全寫入機制（先暫存再改名）
+✅ 自動備份舊檔案
+✅ 檔案完整性驗證
+✅ 防止中斷導致檔案損壞
+
+版本：v12.1 Safe-Write (2025-12-28)
 ================================================================================
 """
 
@@ -162,6 +168,133 @@ print(f"📁 工作目錄: {WINDOW_DIR}")
 print(f"📁 共享目錄: {SHARED_DIR}")
 
 # =============================================================================
+# 🔒 安全檔案管理器 (v12.1 新增)
+# =============================================================================
+class SafeFileManager:
+    """
+    安全的檔案寫入管理器
+    - 使用暫存檔 + 改名的原子性寫入
+    - 自動備份舊檔案
+    - 寫入後驗證完整性
+    """
+
+    @staticmethod
+    def safe_pickle_save(data, filepath, min_size=100):
+        """
+        安全的 pickle 寫入（防止中斷導致損壞）
+
+        Args:
+            data: 要保存的資料
+            filepath: 目標檔案路徑
+            min_size: 最小有效檔案大小（bytes）
+
+        Returns:
+            bool: 是否成功
+        """
+        temp_path = filepath + '.tmp'
+        backup_path = filepath + '.backup'
+
+        try:
+            # 1. 先寫入暫存檔
+            with open(temp_path, 'wb') as f:
+                pickle.dump(data, f)
+
+            # 2. 驗證暫存檔
+            if not SafeFileManager.verify_pickle_file(temp_path, min_size):
+                print(f"   ⚠️ 暫存檔驗證失敗: {temp_path}")
+                if os.path.exists(temp_path):
+                    os.remove(temp_path)
+                return False
+
+            # 3. 備份舊檔案（如果存在且有效）
+            if os.path.exists(filepath):
+                if SafeFileManager.verify_pickle_file(filepath, min_size):
+                    shutil.copy2(filepath, backup_path)
+
+            # 4. 原子性替換（move 比 copy + delete 更安全）
+            shutil.move(temp_path, filepath)
+
+            # 5. 最終驗證
+            if SafeFileManager.verify_pickle_file(filepath, min_size):
+                return True
+            else:
+                # 嘗試從備份恢復
+                if os.path.exists(backup_path):
+                    print(f"   ⚠️ 最終驗證失敗，從備份恢復...")
+                    shutil.copy2(backup_path, filepath)
+                return False
+
+        except Exception as e:
+            print(f"   ⚠️ 安全寫入失敗: {e}")
+            # 清理暫存檔
+            if os.path.exists(temp_path):
+                try:
+                    os.remove(temp_path)
+                except:
+                    pass
+            # 嘗試從備份恢復
+            if os.path.exists(backup_path) and not os.path.exists(filepath):
+                try:
+                    shutil.copy2(backup_path, filepath)
+                    print(f"   ✅ 已從備份恢復: {filepath}")
+                except:
+                    pass
+            return False
+
+    @staticmethod
+    def verify_pickle_file(filepath, min_size=100):
+        """
+        驗證 pkl 檔案是否正常
+
+        Args:
+            filepath: 檔案路徑
+            min_size: 最小有效大小（bytes）
+
+        Returns:
+            bool: 檔案是否有效
+        """
+        try:
+            # 檢查檔案存在
+            if not os.path.exists(filepath):
+                return False
+
+            # 檢查檔案大小
+            size = os.path.getsize(filepath)
+            if size < min_size:
+                return False
+
+            # 嘗試讀取並解析
+            with open(filepath, 'rb') as f:
+                data = pickle.load(f)
+
+            return True
+
+        except Exception as e:
+            return False
+
+    @staticmethod
+    def safe_json_save(data, filepath):
+        """安全的 JSON 寫入"""
+        temp_path = filepath + '.tmp'
+
+        try:
+            with open(temp_path, 'w', encoding='utf-8') as f:
+                json.dump(data, f, ensure_ascii=False, indent=2)
+
+            shutil.move(temp_path, filepath)
+            return True
+
+        except Exception as e:
+            print(f"   ⚠️ JSON 寫入失敗: {e}")
+            if os.path.exists(temp_path):
+                os.remove(temp_path)
+            return False
+
+# 創建全域安全檔案管理器
+safe_file_mgr = SafeFileManager()
+print("✅ 安全檔案管理器已初始化")
+
+# =============================================================================
 # Discord 通知
 # =============================================================================
 class DiscordNotifier:
@@ -272,13 +405,20 @@ class CrossWindowManager:
                     'fitness': ind.fitness.values[0] if ind.fitness.valid else 0.0
                 })
 
-            # 保存到共享資料夾
+            # 🔒 使用安全寫入保存到共享資料夾
             filename = f"{self.shared_dir}/window_{self.window_id}_elites.pkl"
-            with open(filename, 'wb') as f:
-                pickle.dump(elite_data, f)
+            success = SafeFileManager.safe_pickle_save(elite_data, filename)
 
-            print(f"   💾 Window {self.window_id} 精英已保存到共享區 ({len(elites)} 個)")
-            return True
+            if success:
+                print(f"   💾 Window {self.window_id} 精英已安全保存到共享區 ({len(elites)} 個)")
+                return True
+            else:
+                print(f"   ⚠️ 安全保存失敗，嘗試傳統寫入...")
+                # 降級到傳統寫入
+                with open(filename, 'wb') as f:
+                    pickle.dump(elite_data, f)
+                print(f"   💾 Window {self.window_id} 精英已保存到共享區 ({len(elites)} 個)")
+                return True
 
         except Exception as e:
             print(f"   ⚠️ 保存精英失敗: {e}")
@@ -1058,33 +1198,56 @@ class EvolutionEngine:
 
     def _save_results(self, population, result):
         try:
-            # 保存到視窗資料夾
-            with open(f"{WINDOW_DIR}/best_gene.pkl", 'wb') as f:
-                pickle.dump({
-                    'gene': self.best_ever or list(tools.selBest(population, 1)[0]),
-                    'metrics': self.best_metrics or result,
-                    'timestamp': datetime.now().isoformat()
-                }, f)
+            print("\n🔒 使用安全寫入保存結果...")
 
-            # 保存 checkpoint (for future loading)
-            with open(f"{WINDOW_DIR}/checkpoint_latest.pkl", 'wb') as f:
-                pickle.dump({
-                    'halloffame': tools.selBest(population, 10),
-                    'population': population,
-                    'generation': N_GENERATIONS,
-                    'timestamp': datetime.now().isoformat()
-                }, f)
+            # 🔒 安全保存最佳基因
+            best_gene_data = {
+                'gene': self.best_ever or list(tools.selBest(population, 1)[0]),
+                'metrics': self.best_metrics or result,
+                'timestamp': datetime.now().isoformat()
+            }
+            best_gene_path = f"{WINDOW_DIR}/best_gene.pkl"
+            if SafeFileManager.safe_pickle_save(best_gene_data, best_gene_path):
+                print(f"   ✅ best_gene.pkl 安全保存成功")
+            else:
+                print(f"   ⚠️ best_gene.pkl 安全保存失敗，使用傳統方式")
+                with open(best_gene_path, 'wb') as f:
+                    pickle.dump(best_gene_data, f)
 
-            with open(f"{WINDOW_DIR}/history.json", 'w') as f:
-                json.dump(self.history, f)
+            # 🔒 安全保存 checkpoint
+            checkpoint_data = {
+                'halloffame': tools.selBest(population, 10),
+                'population': population,
+                'generation': N_GENERATIONS,
+                'timestamp': datetime.now().isoformat()
+            }
+            checkpoint_path = f"{WINDOW_DIR}/checkpoint_latest.pkl"
+            if SafeFileManager.safe_pickle_save(checkpoint_data, checkpoint_path):
+                print(f"   ✅ checkpoint_latest.pkl 安全保存成功")
+            else:
+                print(f"   ⚠️ checkpoint_latest.pkl 安全保存失敗，使用傳統方式")
+                with open(checkpoint_path, 'wb') as f:
+                    pickle.dump(checkpoint_data, f)
 
-            # 🔥 最終結果也保存到共享區
+            # 🔒 安全保存歷史記錄
+            history_path = f"{WINDOW_DIR}/history.json"
+            if SafeFileManager.safe_json_save(self.history, history_path):
+                print(f"   ✅ history.json 安全保存成功")
+            else:
+                print(f"   ⚠️ history.json 安全保存失敗，使用傳統方式")
+                with open(history_path, 'w') as f:
+                    json.dump(self.history, f)
+
+            # 🔥 最終結果也保存到共享區 (已使用安全寫入)
             cross_window_mgr.save_elites_to_shared(tools.selBest(population, CROSS_WINDOW_TOP_N), N_GENERATIONS)
 
-            print(f"\n💾 已保存至: {WINDOW_DIR}")
+            print(f"\n💾 已安全保存至: {WINDOW_DIR}")
             print(f"💾 精英已同步至: {SHARED_DIR}")
+
         except Exception as e:
             print(f"⚠️ 保存失敗: {e}")
+            import traceback
+            traceback.print_exc()
 
 # =============================================================================
 # 主程式
