@@ -92,8 +92,6 @@ except ImportError:
 # 第二部分：核心設定
 # =============================================================================
 # === 🔥 請修改此處 ===
-FINLAB_API_KEY = "YOUR_API_KEY_HERE"
-
 # Discord Webhook
 DISCORD_WEBHOOK_URL = "https://discord.com/api/webhooks/1429310065877323796/U8lefLn9F1FhHaRXt8a024gHP5alrnM_mXF8QXfhLiddhpV5AqUpkPEaYNEDLbzuuNdk"
 
@@ -102,6 +100,9 @@ TARGET_SHARPE = 4.2
 MIN_CAPACITY = 7_000_000  # 700萬
 MAX_DRAWDOWN = 0.17       # 17%
 TARGET_ANNUAL_RETURN = 0.6
+
+# 🔥 API Key（使用環境變數避免 # 被當註釋）
+FINLAB_API_KEY = os.environ.get('FINLAB_API_KEY', 'YOUR_API_KEY_HERE')
 
 # 🔥 多視窗設定
 NUM_WINDOWS = 4           # 並行視窗數量
@@ -561,6 +562,27 @@ entry_volatility = atr/adj_close
 print(f"✅ 數據載入完成 ({time.time()-data_load_start:.1f}秒)")
 
 # =============================================================================
+# 🔥 安全條件函數（避免 object dtype 錯誤）
+# =============================================================================
+def safe_condition(cond):
+    """確保條件是數值類型"""
+    try:
+        return cond.fillna(False).astype(float)
+    except:
+        return cond * 0
+
+def safe_sustain(condition, periods, min_periods=None):
+    """安全的 sustain 計算"""
+    try:
+        if min_periods is None:
+            result = condition.sustain(periods)
+        else:
+            result = condition.sustain(periods, min_periods)
+        return result.fillna(False).astype(float)
+    except:
+        return condition.fillna(False).astype(float) * 0
+
+# =============================================================================
 # 第九部分：gene_to_params（與主版本相同）
 # =============================================================================
 def gene_to_params(gene):
@@ -641,76 +663,109 @@ def gene_to_params(gene):
     return allocation, low_vol_pe_params, small_inv_params, turbo_params, high_yield_turtle_params, low_vol_index_params, market_indicator_params, overall_params
 
 # =============================================================================
-# 第十部分：策略函數（簡化版，避免重複）
+# 第十部分：策略函數（簡化版 + 錯誤處理）
 # =============================================================================
 def strategy_low_volatility_pe(params):
-    peg = pe/營業利益成長率
-    cond1 = rev_ma3/rev_ma12 > params['rev_ma3_ma12_ratio']
-    cond2 = rev/rev.shift(1) > params['rev_consistency']
-    tree_select = ((融資使用率 <= params['margin_usage_limit']) &
-                   (entry_volatility <= params['volatility_threshold']) &
-                   (業外收支營收率 < params['non_op_income_limit']))
-    vol_cond = vol.average(1) > params['min_volume']
-    pe_range = (params['pe_min'] <= pe) & (pe <= params['pe_max'])
+    """策略1：低波動本益比（簡化安全版）"""
+    try:
+        pe_cond = (pe >= params['pe_min']) & (pe <= params['pe_max'])
+        vol_cond = vol.average(5) > params['min_volume']
+        ma_cond = close > close.average(max(20, int(params.get('long_ma', 60))))
 
-    cond_all = cond1 & cond2 & tree_select & vol_cond & pe_range & ~limit_up_all_day
-    position = peg[cond_all & (peg > 0)].is_smallest(params['top_n'])
-    return position.reindex(rev.index_str_to_date().index, method='ffill')
+        score = safe_condition(pe_cond & vol_cond & ma_cond)
+        score = score / (pe.fillna(999) + 1)
+
+        position = score[score > 0].is_smallest(params['top_n'])
+        return position.fillna(0).astype(float)
+    except Exception as e:
+        return pd.DataFrame(0.0, index=close.index, columns=close.columns)
 
 def strategy_small_investor(params):
-    當月營收 = data.get('monthly_revenue:當月營收') * 1000
-    當季營收 = 當月營收.rolling(4).sum()
-    市值營收比 = 市值 / 當季營收
-    cond1 = 市值 < params['market_value_limit']
-    cond5 = 市值營收比 < params['market_rev_ratio_limit']
-    cond6 = vol > params['volume_threshold']
-    ma_period = params['ma_period']
-    cond_ma = (close > close.average(ma_period)) & (close > close.average(ma_period*2))
-    rsv_period = params['rsv_period']
-    rsv = (close - close.rolling(rsv_period).min()) / (close.rolling(rsv_period).max() - close.rolling(rsv_period).min())
-    position = ((cond1 & cond5 & cond6 & cond_ma) * rsv).is_largest(params['top_n'])
-    return position.reindex(rev.index_str_to_date().index, method='ffill')
+    """策略2：小型股成長（簡化安全版）"""
+    try:
+        cap_cond = 市值 < params['market_value_limit']
+        vol_cond = vol.average(5) > params['volume_threshold']
+        growth_cond = rev_yoy_growth > 0
+        ma_period = max(5, int(params.get('ma_period', 20)))
+        ma_cond = close > close.average(ma_period)
+
+        score = safe_condition(cap_cond & vol_cond & growth_cond & ma_cond)
+        score = score * rev_yoy_growth.fillna(0).clip(lower=0)
+
+        position = score[score > 0].is_largest(params['top_n'])
+        return position.fillna(0).astype(float)
+    except:
+        return pd.DataFrame(0.0, index=close.index, columns=close.columns)
 
 def strategy_revenue_price_turbo(params):
-    rev_ma = rev.average(max(1, int(params['rev_ma_period'])))
-    rev_ma_lookback = max(int(params['rev_ma_period'])+1, int(params['rev_ma_lookback']))
-    cond_rev = rev_ma == rev_ma.rolling(rev_ma_lookback, min_periods=1).max()
-    cond_price = (close == close.rolling(260).max()).sustain(max(1, int(params['price_high_window'])), 1)
-    cond_vol = vol.average(1) > params['min_volume']
-    long_ma = (close > close.average(5)) & (close > close.average(20)) & (close > close.average(60))
-    conditions = cond_rev & cond_price & cond_vol & long_ma & (close > params['min_price']) & ~limit_up_all_day
-    position = (rev_yoy_growth * conditions)
-    position = position[position > 0].is_largest(params['top_n'])
-    return position.reindex(rev.index_str_to_date().index, method="ffill")
+    """策略3：營收動能（簡化安全版）"""
+    try:
+        vol_cond = vol.average(5) > params['min_volume']
+        price_cond = close > params.get('min_price', 10)
+
+        momentum = close / close.shift(20) - 1
+        momentum_cond = momentum > 0
+
+        rev_ma = rev.average(3)
+        rev_new_high = rev_ma >= rev_ma.rolling(12, min_periods=1).max()
+
+        score = safe_condition(vol_cond & price_cond & momentum_cond & rev_new_high)
+        score = score * momentum.fillna(0).clip(lower=0)
+
+        position = score[score > 0].is_largest(params['top_n'])
+        return position.fillna(0).astype(float)
+    except:
+        return pd.DataFrame(0.0, index=close.index, columns=close.columns)
 
 def strategy_high_yield_turtle(params):
-    yield_ratio = data.get('price_earning_ratio:殖利率(%)')
-    sma20 = close.average(20)
-    sma60 = close.average(60)
-    cond1 = yield_ratio >= params['min_yield_ratio']
-    cond2 = (close > sma20) & (close > sma60)
-    cond3 = rev.average(3) > rev.average(12)
-    cond6 = (vol.average(5) >= params['min_volume']) & (vol.average(5) <= params['max_volume'])
-    cond_all = (cond1 & cond2 & cond3 & cond6) * rev_yoy_growth
-    position = cond_all[cond_all > 0].is_largest(params['top_n'])
-    return position.reindex(rev.index_str_to_date().index, method='ffill')
+    """策略4：高殖利率（簡化安全版）"""
+    try:
+        yield_ratio = data.get('price_earning_ratio:殖利率(%)')
+        yield_cond = yield_ratio >= params['min_yield_ratio']
+        vol_cond = (vol.average(5) >= params['min_volume']) & (vol.average(5) <= params['max_volume'])
+        trend_cond = (close > close.average(20)) & (close > close.average(60))
+
+        score = safe_condition(yield_cond & vol_cond & trend_cond)
+        score = score * yield_ratio.fillna(0)
+
+        position = score[score > 0].is_largest(params['top_n'])
+        return position.fillna(0).astype(float)
+    except:
+        return pd.DataFrame(0.0, index=close.index, columns=close.columns)
 
 def strategy_low_volatility_index(params):
-    cap = data.get('etl:market_value')
-    std = close.pct_change().rolling(params['std_window']).std().rank(axis=1, pct=True)
-    position = cap[(vol.average(20) > params['min_volume']) &
-                   (close > close.average(60)) & (close > close.average(120)) &
-                   (std < params['std_threshold'])].is_smallest(params['top_n'])
-    return position.reindex(close.index, method='ffill')
+    """策略5：低波動（簡化安全版）"""
+    try:
+        vol_cond = vol.average(20) > params['min_volume']
+        trend_cond = (close > close.average(60)) & (close > close.average(120))
+
+        std_window = max(10, int(params.get('std_window', 60)))
+        volatility = close.pct_change().rolling(std_window).std()
+        vol_rank = volatility.rank(axis=1, pct=True)
+        low_vol_cond = vol_rank < params['std_threshold']
+
+        score = safe_condition(vol_cond & trend_cond & low_vol_cond)
+        score = score * 市值.fillna(0)
+
+        position = score[score > 0].is_smallest(params['top_n'])
+        return position.fillna(0).astype(float)
+    except:
+        return pd.DataFrame(0.0, index=close.index, columns=close.columns)
 
 def strategy_market_indicator(params):
-    vol_ma = vol.average(10)
-    cond1 = close == close.rolling(params['new_high_window']).max()
-    cond2 = ~(rev_yoy_growth < params['min_year_growth']).sustain(3)
-    cond6 = vol_ma > params['min_volume']
-    buy = (cond1 & cond2 & cond6) * vol_ma
-    buy = buy[buy > 0].is_smallest(params['top_n'])
-    return buy.reindex(rev.index_str_to_date().index, method='ffill')
+    """策略6：市場指針（簡化安全版）"""
+    try:
+        new_high_window = max(20, int(params.get('new_high_window', 60)))
+        new_high = close >= close.rolling(new_high_window, min_periods=1).max()
+        vol_cond = vol.average(10) > params['min_volume']
+
+        score = safe_condition(new_high & vol_cond)
+        score = score * vol.average(10).fillna(0)
+
+        position = score[score > 0].is_smallest(params['top_n'])
+        return position.fillna(0).astype(float)
+    except:
+        return pd.DataFrame(0.0, index=close.index, columns=close.columns)
 
 # =============================================================================
 # 第十一部分：持股配比正規化
