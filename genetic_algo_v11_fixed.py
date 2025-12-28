@@ -74,7 +74,10 @@ except ImportError:
 # 核心設定
 # =============================================================================
 WINDOW_ID = 1
-FINLAB_API_KEY = "YOUR_API_KEY_HERE"
+# 🔥 API Key 設定方式（二選一）：
+# 方式1: 直接在這裡填入（注意 # 符號會被當作註釋）
+# 方式2: 使用環境變數 os.environ['FINLAB_API_KEY'] = "your_key"
+FINLAB_API_KEY = os.environ.get('FINLAB_API_KEY', 'YOUR_API_KEY_HERE')
 
 DISCORD_WEBHOOK_URL = "https://discord.com/api/webhooks/1429310065877323796/U8lefLn9F1FhHaRXt8a024gHP5alrnM_mXF8QXfhLiddhpV5AqUpkPEaYNEDLbzuuNdk"
 
