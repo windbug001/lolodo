@@ -1,5 +1,8 @@
-##十二組合快快龍_優化版_高胃納量_夏普4.0目標 v2.0 (樣本外測試版)
+##十二組合快快龍_優化版_高胃納量_夏普4.0目標 v2.1 (完整版)
 
+# ============================================================================
+# 🧬 十二組合快快龍 v2.1 (完整版)
+#    統一功能：3視窗交互 + 安全寫入 + Discord + Checkpoint + 樣本外測試
 # ============================================================================
 # 優化重點：
 # 1. ✅ 強制胃納量 >= 1000萬 (10M TWD)
@@ -20,6 +23,14 @@
 # 13.✅ 每 20 代顯示訓練期 vs 測試期夏普比較
 # 14.✅ 自動過擬合警告（測試/訓練比 < 60%）
 # 15.✅ 最終報告包含完整樣本外測試結果
+# ============================================================================
+# 🔥 v2.1 新增：功能統一
+# ============================================================================
+# 16.✅ SafeFileManager 安全寫入機制（先暫存再改名）
+# 17.✅ 3視窗交互取優秀基因機制 (CrossWindowManager)
+# 18.✅ 完整 Discord 通知系統
+# 19.✅ CheckpointManager 斷點續傳機制
+# 20.✅ 每5代自動保存 checkpoint
 # ============================================================================
 
 # ============================================================================
@@ -256,6 +267,144 @@ def safe_file_operation(operation, max_retries=3, delay=0.5):
 
 
 # ============================================================================
+# 🔒 安全檔案管理器 (SafeFileManager)
+# ============================================================================
+class SafeFileManager:
+    """
+    安全的檔案寫入管理器
+    - 使用暫存檔 + 改名的原子性寫入
+    - 自動備份舊檔案
+    - 寫入後驗證完整性
+    """
+
+    @staticmethod
+    def safe_pickle_save(data, filepath, min_size=100):
+        """安全的 pickle 寫入"""
+        temp_path = filepath + '.tmp'
+        backup_path = filepath + '.backup'
+
+        try:
+            with open(temp_path, 'wb') as f:
+                pickle.dump(data, f)
+
+            if not SafeFileManager.verify_pickle_file(temp_path, min_size):
+                if os.path.exists(temp_path):
+                    os.remove(temp_path)
+                return False
+
+            if os.path.exists(filepath):
+                if SafeFileManager.verify_pickle_file(filepath, min_size):
+                    shutil.copy2(filepath, backup_path)
+
+            shutil.move(temp_path, filepath)
+
+            if SafeFileManager.verify_pickle_file(filepath, min_size):
+                return True
+            else:
+                if os.path.exists(backup_path):
+                    shutil.copy2(backup_path, filepath)
+                return False
+
+        except Exception as e:
+            if os.path.exists(temp_path):
+                try:
+                    os.remove(temp_path)
+                except:
+                    pass
+            if os.path.exists(backup_path) and not os.path.exists(filepath):
+                try:
+                    shutil.copy2(backup_path, filepath)
+                except:
+                    pass
+            return False
+
+    @staticmethod
+    def verify_pickle_file(filepath, min_size=100):
+        """驗證 pkl 檔案是否正常"""
+        try:
+            if not os.path.exists(filepath):
+                return False
+            size = os.path.getsize(filepath)
+            if size < min_size:
+                return False
+            with open(filepath, 'rb') as f:
+                pickle.load(f)
+            return True
+        except:
+            return False
+
+    @staticmethod
+    def safe_json_save(data, filepath):
+        """安全的 JSON 寫入"""
+        temp_path = filepath + '.tmp'
+        try:
+            with open(temp_path, 'w', encoding='utf-8') as f:
+                json.dump(data, f, ensure_ascii=False, indent=2)
+            shutil.move(temp_path, filepath)
+            return True
+        except:
+            if os.path.exists(temp_path):
+                os.remove(temp_path)
+            return False
+
+print("✅ 安全檔案管理器 (SafeFileManager) 已載入")
+
+
+# ============================================================================
+# 🔔 Discord 通知系統
+# ============================================================================
+DISCORD_WEBHOOK_URL = "https://discord.com/api/webhooks/1429310065877323796/U8lefLn9F1FhHaRXt8a024gHP5alrnM_mXF8QXfhLiddhpV5AqUpkPEaYNEDLbzuuNdk"
+
+class DiscordNotifier:
+    """Discord 通知管理器"""
+
+    def __init__(self, webhook_url):
+        self.webhook_url = webhook_url
+        self.enabled = True
+        self.start_time = None
+
+        if self.enabled:
+            try:
+                payload = {"content": f"✅ 十二組合快快龍 v2.1 (完整版) - 視窗 {WINDOW_ID} 啟動\n   訓練期: {TRAIN_START}~{TRAIN_END}\n   測試期: {TEST_START}~{TEST_END}", "username": "天空龍"}
+                requests.post(self.webhook_url, json=payload, timeout=5)
+                print("✅ Discord 通知系統已連接")
+            except:
+                self.enabled = False
+                print("⚠️ Discord 通知系統未連接")
+
+    def send(self, message):
+        """發送簡單訊息"""
+        if not self.enabled:
+            return
+        try:
+            payload = {"content": message, "username": "天空龍"}
+            requests.post(self.webhook_url, json=payload, timeout=5)
+        except:
+            pass
+
+    def send_embed(self, title, description, color_type='info'):
+        """發送嵌入式訊息"""
+        if not self.enabled:
+            return
+        colors = {'success': 0x00ff00, 'warning': 0xffff00, 'error': 0xff0000, 'info': 0x0099ff}
+        color = colors.get(color_type, colors['info'])
+        try:
+            embed = {
+                "title": title,
+                "description": description,
+                "color": color,
+                "timestamp": datetime.datetime.utcnow().isoformat()
+            }
+            payload = {"embeds": [embed], "username": "天空龍"}
+            requests.post(self.webhook_url, json=payload, timeout=5)
+        except:
+            pass
+
+# 初始化 Discord 通知器（稍後在 WINDOW_ID 確定後初始化）
+notifier = None
+
+
+# ============================================================================
 # 第二部分：獨立的資料管理器
 # ============================================================================
 class IndependentDataManager:
@@ -452,6 +601,120 @@ else:
 FEE_RATIO = 1.425/1000
 TAX_RATIO = 3/1000
 STAGNATION_THRESHOLD = 3
+
+# 🔥 3視窗交互設定
+CROSS_WINDOW_INTERVAL = 10  # 每10代交換一次
+CROSS_WINDOW_TOP_N = 5      # 每次交換最佳5個基因
+ALL_WINDOW_IDS = [1, 2, 3]  # 所有視窗ID
+
+# ============================================================================
+# 🔥 3視窗交互機制 - CrossWindowManager
+# ============================================================================
+class CrossWindowManager:
+    """3視窗交互管理器"""
+
+    def __init__(self, base_dir, window_id, shared_dir):
+        self.base_dir = base_dir
+        self.window_id = window_id
+        self.shared_dir = shared_dir
+        Path(self.shared_dir).mkdir(parents=True, exist_ok=True)
+
+    def save_elite_to_shared(self, population, generation):
+        """保存精英到共享資料夾"""
+        try:
+            best_individuals = sorted(population, key=lambda x: x.fitness.values[0] if x.fitness.valid else 0, reverse=True)[:CROSS_WINDOW_TOP_N]
+
+            elite_data = {
+                'window_id': self.window_id,
+                'generation': generation,
+                'timestamp': datetime.datetime.now().isoformat(),
+                'elites': [{'gene': list(ind), 'fitness': ind.fitness.values[0] if ind.fitness.valid else 0}
+                          for ind in best_individuals]
+            }
+
+            filename = f"{self.shared_dir}/elite_w{self.window_id}_g{generation}.pkl"
+            success = SafeFileManager.safe_pickle_save(elite_data, filename)
+            if success:
+                print(f"   💾 精英已保存到共享資料夾 (視窗{self.window_id})")
+            return success
+        except Exception as e:
+            print(f"   ⚠️ 保存精英失敗: {e}")
+            return False
+
+    def load_other_windows_elites(self):
+        """載入其他視窗的精英"""
+        all_elites = []
+        try:
+            for window_id in ALL_WINDOW_IDS:
+                if window_id == self.window_id:
+                    continue
+
+                pattern = f"{self.shared_dir}/elite_w{window_id}_g*.pkl"
+                files = sorted(glob.glob(pattern), key=os.path.getmtime, reverse=True)
+
+                if files:
+                    latest_file = files[0]
+                    try:
+                        with open(latest_file, 'rb') as f:
+                            data = pickle.load(f)
+                        for elite in data.get('elites', []):
+                            elite['source_window'] = window_id
+                            all_elites.append(elite)
+                    except:
+                        continue
+        except:
+            pass
+        return all_elites
+
+    def perform_cross_window_exchange(self, population, generation, creator_class):
+        """執行跨視窗基因交換"""
+        print(f"\n   🔄 第 {generation} 代 - 3視窗交互...")
+
+        self.save_elite_to_shared(population, generation)
+        other_elites = self.load_other_windows_elites()
+
+        if other_elites:
+            n_inject = min(len(other_elites), CROSS_WINDOW_TOP_N)
+            population.sort(key=lambda x: x.fitness.values[0] if x.fitness.valid else 0)
+
+            for i, elite in enumerate(other_elites[:n_inject]):
+                new_ind = creator_class(elite['gene'])
+                new_ind.fitness.values = (elite['fitness'],)
+                population[i] = new_ind
+
+            print(f"   ✅ 注入 {n_inject} 個其他視窗精英")
+            if notifier:
+                notifier.send(f"🔄 視窗{self.window_id} 第{generation}代\n注入 {n_inject} 個外部精英")
+        else:
+            print(f"   ℹ️ 無其他視窗精英可注入")
+
+        return population
+
+    def get_all_windows_best(self):
+        """取得所有視窗的最佳結果"""
+        results = {}
+        for window_id in ALL_WINDOW_IDS:
+            pattern = f"{self.shared_dir}/elite_w{window_id}_g*.pkl"
+            files = sorted(glob.glob(pattern), key=os.path.getmtime, reverse=True)
+            if files:
+                try:
+                    with open(files[0], 'rb') as f:
+                        data = pickle.load(f)
+                    if data.get('elites'):
+                        results[window_id] = {
+                            'best_fitness': data['elites'][0]['fitness'],
+                            'generation': data['generation']
+                        }
+                except:
+                    continue
+        return results
+
+# 初始化 CrossWindowManager
+cross_window_mgr = CrossWindowManager(BASE_PATH, WINDOW_ID, SHARED_PATH)
+print("✅ 3視窗交互管理器已初始化")
+
+# 初始化 Discord 通知器
+notifier = DiscordNotifier(DISCORD_WEBHOOK_URL)
 
 # 診斷模式
 DIAGNOSTIC_MODE = True
@@ -2033,33 +2296,120 @@ def load_shared_best_individuals():
 
 
 # ============================================================================
-# 第十四部分：檢查點管理
+# 第十四部分：檢查點管理（升級版 - 使用 SafeFileManager）
 # ============================================================================
+class CheckpointManager:
+    """Checkpoint 管理器 - 支援斷點續傳"""
+
+    def __init__(self, window_id, checkpoint_path):
+        self.window_id = window_id
+        self.checkpoint_path = checkpoint_path
+        self.checkpoint_file = os.path.join(checkpoint_path, f'checkpoint_window_{window_id}_latest.pkl')
+        Path(checkpoint_path).mkdir(parents=True, exist_ok=True)
+
+    def save(self, population, generation, halloffame=None, history=None):
+        """保存 checkpoint（使用 SafeFileManager）"""
+        try:
+            checkpoint_data = {
+                'population': [{'genes': list(ind), 'fitness': ind.fitness.values[0] if ind.fitness.valid else None}
+                              for ind in population],
+                'generation': generation,
+                'halloffame': [{'genes': list(ind), 'fitness': ind.fitness.values[0]}
+                              for ind in halloffame] if halloffame else [],
+                'history': history or [],
+                'random_state': random.getstate(),
+                'numpy_state': np.random.get_state(),
+                'timestamp': datetime.datetime.now().isoformat(),
+                'window_id': self.window_id
+            }
+
+            success = SafeFileManager.safe_pickle_save(checkpoint_data, self.checkpoint_file)
+            if success:
+                print(f"   💾 Checkpoint 已保存 (第 {generation} 代)")
+
+                # 同時保存帶世代號的備份
+                gen_file = os.path.join(self.checkpoint_path, f'checkpoint_window_{self.window_id}_gen_{generation}.pkl')
+                SafeFileManager.safe_pickle_save(checkpoint_data, gen_file)
+
+            return success
+
+        except Exception as e:
+            print(f"   ⚠️ Checkpoint 保存失敗: {e}")
+            return False
+
+    def load(self, creator_class):
+        """載入 checkpoint"""
+        if not os.path.exists(self.checkpoint_file):
+            print("ℹ️ 無 checkpoint，從頭開始")
+            return None
+
+        try:
+            with open(self.checkpoint_file, 'rb') as f:
+                data = pickle.load(f)
+
+            if not data.get('population') or not data.get('generation'):
+                print("⚠️ Checkpoint 無效，從頭開始")
+                return None
+
+            # 恢復隨機狀態
+            if data.get('random_state'):
+                random.setstate(data['random_state'])
+            if data.get('numpy_state'):
+                np.random.set_state(data['numpy_state'])
+
+            # 重建族群
+            population = []
+            for ind_data in data['population']:
+                new_ind = creator_class(ind_data['genes'])
+                if ind_data['fitness'] is not None:
+                    new_ind.fitness.values = (ind_data['fitness'],)
+                population.append(new_ind)
+
+            print(f"✅ 從 checkpoint 恢復: 第 {data['generation']} 代, 族群 {len(population)}")
+            print(f"   📅 保存時間: {data.get('timestamp', 'N/A')}")
+
+            return {
+                'population': population,
+                'generation': data['generation'],
+                'history': data.get('history', [])
+            }
+
+        except Exception as e:
+            print(f"⚠️ Checkpoint 載入失敗: {e}")
+            return None
+
+    def exists(self):
+        """檢查是否有 checkpoint"""
+        return os.path.exists(self.checkpoint_file)
+
+# 初始化 CheckpointManager
+checkpoint_mgr = CheckpointManager(WINDOW_ID, CHECKPOINT_PATH)
+print("✅ Checkpoint 管理器已初始化")
+
+
+# 保留舊函數以相容
 def save_checkpoint(checkpoint_data, window_id, generation):
-    """儲存檢查點"""
+    """儲存檢查點（舊版相容）"""
     checkpoint_file = os.path.join(CHECKPOINT_PATH, f'checkpoint_window_{window_id}_gen_{generation}.pkl')
     latest_file = os.path.join(CHECKPOINT_PATH, f'checkpoint_window_{window_id}_latest.pkl')
 
     try:
-        with ImprovedFileLock(checkpoint_file, timeout=5):
-            with open(checkpoint_file, 'wb') as f:
-                pickle.dump(checkpoint_data, f)
-            if os.path.exists(latest_file):
-                os.remove(latest_file)
-            shutil.copy2(checkpoint_file, latest_file)
+        success = SafeFileManager.safe_pickle_save(checkpoint_data, checkpoint_file)
+        if success:
+            SafeFileManager.safe_pickle_save(checkpoint_data, latest_file)
+            print(f"   💾 Checkpoint 已保存 (第 {generation} 代)")
     except:
         pass
 
 
 def load_checkpoint(window_id):
-    """載入檢查點"""
+    """載入檢查點（舊版相容）"""
     latest_file = os.path.join(CHECKPOINT_PATH, f'checkpoint_window_{window_id}_latest.pkl')
     if not os.path.exists(latest_file):
         return None
     try:
-        with ImprovedFileLock(latest_file, timeout=5):
-            with open(latest_file, 'rb') as f:
-                return pickle.load(f)
+        with open(latest_file, 'rb') as f:
+            return pickle.load(f)
     except:
         return None
 
@@ -2317,6 +2667,14 @@ def run_genetic_algorithm():
         if (gen + 1) % 10 == 0:
             share_best_individuals(population, WINDOW_ID)
 
+        # 🔥 每 CROSS_WINDOW_INTERVAL 代執行3視窗交互
+        if (gen + 1) % CROSS_WINDOW_INTERVAL == 0:
+            population = cross_window_mgr.perform_cross_window_exchange(population, gen + 1, creator.Individual)
+            # 重新評估新注入的個體
+            for ind in population:
+                if not ind.fitness.valid:
+                    ind.fitness.values = toolbox.evaluate(ind)
+
         # 🔄 每 N 代執行定期回測
         if (gen + 1) % BACKTEST_EVERY_N_GEN == 0:
             periodic_backtest(halloffame, gen + 1, "定期檢查")
@@ -2326,7 +2684,15 @@ def run_genetic_algorithm():
                 best_individual = halloffame[0]
                 perform_oos_backtest(best_individual, "最佳個體", gen + 1)
 
+        # 🔥 每 5 代保存 checkpoint（使用新 CheckpointManager）
         if (gen + 1) % 5 == 0:
+            checkpoint_mgr.save(
+                population=population,
+                generation=gen + 1,
+                halloffame=list(halloffame),
+                history=best_fitness_history
+            )
+            # 同時保存舊格式（相容性）
             cp = {
                 'population': population,
                 'generation': gen + 1,

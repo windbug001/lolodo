@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 ================================================================================
-🧬 FinLab 台股基因演算法優化系統 - 終極版 v1.1
+🧬 FinLab 台股基因演算法優化系統 - 終極版 v1.2 (樣本外測試版)
 FinLab Taiwan Stock Genetic Algorithm Optimizer - Ultimate Edition
 ================================================================================
 
@@ -18,6 +18,14 @@ FinLab Taiwan Stock Genetic Algorithm Optimizer - Ultimate Edition
 ✅ 安全寫入機制（先暫存再改名）
 ✅ 自動備份舊檔案 + 檔案完整性驗證
 ✅ Discord 通知功能
+✅ Checkpoint 斷點續傳
+
+【v1.2 新增功能 - 樣本外測試】
+✅ 訓練期/測試期分離 (2017~2022 訓練, 2023~2025 測試)
+✅ 適應度評估僅使用訓練期數據
+✅ 每5代顯示訓練期 vs 測試期夏普比較
+✅ 自動過擬合警告（測試/訓練比 < 60%）
+✅ 最終報告包含完整樣本外測試結果
 
 【目標】
 - 夏普值：>= 4.0
@@ -31,7 +39,7 @@ FinLab Taiwan Stock Genetic Algorithm Optimizer - Ultimate Edition
 3. 營收股價雙渦輪策略
 4. 動態權重優化
 
-版本：v1.1 Safe-Write + CrossWindow (2025-12-28)
+版本：v1.2 OOS-Test (2025-12-28)
 環境：Google Colab Pro+ (CPU + High-RAM)
 ================================================================================
 """
@@ -102,10 +110,26 @@ TEST_MONTHS = 6           # 測試期 6 個月
 BACKTEST_START = '2017-01-01'
 BACKTEST_END = None
 
+# =============================================================================
+# 🔬 樣本外測試設定 (Out-of-Sample Testing) - 防過擬合
+# =============================================================================
+TRAIN_START = '2017-01-01'   # 訓練期開始
+TRAIN_END = '2022-12-31'     # 訓練期結束
+TEST_START = '2023-01-01'    # 測試期開始
+TEST_END = '2025-12-31'      # 測試期結束
+
+# 過擬合警告閾值
+OVERFIT_SHARPE_RATIO = 0.6   # 測試期夏普 / 訓練期夏普 < 0.6 則警告
+OVERFIT_RETURN_RATIO = 0.5   # 測試期報酬 / 訓練期報酬 < 0.5 則警告
+
+OOS_TEST_INTERVAL = 5        # 每 N 代執行一次樣本外測試
+
 print(f"=" * 80)
-print(f"🚀 FinLab 台股基因演算法優化系統 v1.1 (3視窗交互+安全寫入版) - 視窗 {WINDOW_ID}")
+print(f"🚀 FinLab 台股基因演算法優化系統 v1.2 (樣本外測試版) - 視窗 {WINDOW_ID}")
 print(f"   🎯 目標：夏普 >= {TARGET_SHARPE}, 胃納量 >= {MIN_CAPACITY/1e4:.0f}萬")
 print(f"   🔄 視窗交互：每 {CROSS_WINDOW_INTERVAL} 代交換 Top {CROSS_WINDOW_TOP_N} 基因")
+print(f"   📊 訓練期：{TRAIN_START} ~ {TRAIN_END}")
+print(f"   🔬 測試期：{TEST_START} ~ {TEST_END}")
 print(f"=" * 80)
 
 # =============================================================================
@@ -353,7 +377,7 @@ class DiscordNotifier:
 
         if self.enabled:
             try:
-                payload = {"content": f"✅ 小小龍 v1.1 (3視窗交互+安全寫入版) - 視窗 {WINDOW_ID} 啟動", "username": "小小龍"}
+                payload = {"content": f"✅ 小小龍 v1.2 (樣本外測試版) - 視窗 {WINDOW_ID} 啟動\n   訓練期: {TRAIN_START}~{TRAIN_END}\n   測試期: {TEST_START}~{TEST_END}", "username": "小小龍"}
                 requests.post(self.webhook_url, json=payload, timeout=5)
                 print("✅ Discord 通知系統已連接")
             except:
@@ -1234,6 +1258,132 @@ class WalkForwardBacktest:
 walk_forward = WalkForwardBacktest()
 
 # =============================================================================
+# 🔬 樣本外測試函數 (Out-of-Sample Testing)
+# =============================================================================
+def run_backtest_period(individual: List[float], start_date: str, end_date: str, name: str = "Strategy") -> Optional[Dict]:
+    """
+    🔬 指定期間回測（用於樣本外測試）
+
+    Args:
+        individual: 基因向量
+        start_date: 開始日期
+        end_date: 結束日期
+        name: 策略名稱
+    """
+    try:
+        # 解碼基因
+        params = gene_decoder.decode(individual)
+
+        # 組合策略
+        position = strategy_engine.combine_strategies(params)
+
+        if position is None or position.empty:
+            return None
+
+        # 過濾時間範圍
+        position = position.loc[start_date:end_date]
+
+        if position.empty or position.sum().sum() == 0:
+            return None
+
+        report = sim(
+            position=position,
+            fee_ratio=1.425 / 1000,
+            tax_ratio=3 / 1000,
+            trade_at_price="high_low_avg",
+            position_limit=params.get('position_limit', 0.35),
+            stop_loss=params.get('stop_loss', 0.25),
+            trail_stop=params.get('trail_stop', 0.35),
+            take_profit=params.get('take_profit', 0.7),
+            upload=False,
+            name=name,
+        )
+
+        if report is None:
+            return None
+
+        metrics = report.get_metrics()
+        return {
+            'sharpe': metrics['ratio'].get('sharpeRatio', 0) or 0,
+            'sortino': metrics['ratio'].get('sortinoRatio', 0) or 0,
+            'calmar': metrics['ratio'].get('calmarRatio', 0) or 0,
+            'annual_return': metrics['profitability'].get('annualReturn', 0) or 0,
+            'max_drawdown': abs(metrics['risk'].get('maxDrawdown', 1)),
+            'capacity': metrics['liquidity'].get('capacity', 0) or 0,
+            'period': f"{start_date} ~ {end_date}",
+            'gene': list(individual)
+        }
+    except Exception as e:
+        return None
+
+
+def run_oos_test(individual: List[float], name: str = "OOS_Test") -> Optional[Dict]:
+    """
+    🔬 執行樣本外測試（同時回測訓練期和測試期）
+
+    Returns:
+        dict: 包含 train_result, test_result, overfit_warning
+    """
+    # 訓練期回測
+    train_result = run_backtest_period(individual, TRAIN_START, TRAIN_END, f"{name}_Train")
+
+    # 測試期回測
+    test_result = run_backtest_period(individual, TEST_START, TEST_END, f"{name}_Test")
+
+    if train_result is None or test_result is None:
+        return None
+
+    # 計算過擬合指標
+    sharpe_ratio = test_result['sharpe'] / train_result['sharpe'] if train_result['sharpe'] > 0 else 0
+    return_ratio = test_result['annual_return'] / train_result['annual_return'] if train_result['annual_return'] > 0 else 0
+
+    # 過擬合警告
+    overfit_warnings = []
+    if sharpe_ratio < OVERFIT_SHARPE_RATIO and train_result['sharpe'] > 1.0:
+        overfit_warnings.append(f"⚠️ 夏普衰減嚴重: {sharpe_ratio:.1%} (測試/訓練)")
+    if return_ratio < OVERFIT_RETURN_RATIO and train_result['annual_return'] > 0.2:
+        overfit_warnings.append(f"⚠️ 報酬衰減嚴重: {return_ratio:.1%} (測試/訓練)")
+
+    return {
+        'train': train_result,
+        'test': test_result,
+        'sharpe_ratio': sharpe_ratio,
+        'return_ratio': return_ratio,
+        'overfit_warnings': overfit_warnings,
+        'is_overfit': len(overfit_warnings) > 0
+    }
+
+
+def print_oos_comparison(oos_result: Optional[Dict]) -> None:
+    """打印樣本外測試比較結果"""
+    if oos_result is None:
+        print("   ⚠️ 樣本外測試失敗")
+        return
+
+    train = oos_result['train']
+    test = oos_result['test']
+
+    print(f"\n   {'─'*55}")
+    print(f"   📊 樣本外測試結果比較")
+    print(f"   {'─'*55}")
+    print(f"   {'指標':<12} {'訓練期':>12} {'測試期':>12} {'比率':>10}")
+    print(f"   {'':<12} {'('+TRAIN_START[:4]+'~'+TRAIN_END[:4]+')':>12} {'('+TEST_START[:4]+'~'+TEST_END[:4]+')':>12}")
+    print(f"   {'─'*55}")
+    print(f"   {'夏普值':<10} {train['sharpe']:>12.3f} {test['sharpe']:>12.3f} {oos_result['sharpe_ratio']:>9.1%}")
+    print(f"   {'年化報酬':<10} {train['annual_return']*100:>11.1f}% {test['annual_return']*100:>11.1f}% {oos_result['return_ratio']:>9.1%}")
+    print(f"   {'最大回檔':<10} {train['max_drawdown']*100:>11.1f}% {test['max_drawdown']*100:>11.1f}%")
+    print(f"   {'胃納量(萬)':<10} {train['capacity']/1e4:>12.0f} {test['capacity']/1e4:>12.0f}")
+    print(f"   {'─'*55}")
+
+    if oos_result['is_overfit']:
+        print(f"   🔴 過擬合警告:")
+        for warning in oos_result['overfit_warnings']:
+            print(f"      {warning}")
+    else:
+        print(f"   🟢 通過樣本外測試！測試期表現穩定")
+
+
+# =============================================================================
 # 第八部分：適應度評估函數
 # =============================================================================
 def evaluate_fitness(individual: List[float]) -> Tuple[float, float, float, float]:
@@ -1677,6 +1827,30 @@ class EvolutionEngine:
                 print(f"   穩健性: {stats['best_robustness']:.2f}")
                 print(f"   耗時: {elapsed:.1f}s")
 
+            # 🔬 每 OOS_TEST_INTERVAL 代執行樣本外測試
+            if (gen + 1) % OOS_TEST_INTERVAL == 0:
+                best_ind = tools.selBest(population, 1)[0]
+                print(f"\n   🔬 執行樣本外測試...")
+                oos_result = run_oos_test(best_ind, name=f"Gen{gen+1}")
+
+                if oos_result:
+                    train_sharpe = oos_result['train']['sharpe']
+                    test_sharpe = oos_result['test']['sharpe']
+                    overfit_flag = "🔴" if oos_result['is_overfit'] else "🟢"
+
+                    print(f"      訓練期({TRAIN_START[:4]}~{TRAIN_END[:4]}): 夏普 {train_sharpe:.3f}")
+                    print(f"      測試期({TEST_START[:4]}~{TEST_END[:4]}): 夏普 {test_sharpe:.3f} {overfit_flag}")
+                    print(f"      測試/訓練比: {oos_result['sharpe_ratio']:.1%}")
+
+                    # Discord 通知
+                    if oos_result['is_overfit']:
+                        notifier.send(
+                            f"⚠️ 小小龍 視窗{WINDOW_ID} 第{gen+1}代\n"
+                            f"訓練期夏普: {train_sharpe:.3f}\n"
+                            f"測試期夏普: {test_sharpe:.3f}\n"
+                            f"比率: {oos_result['sharpe_ratio']:.1%} 🔴 過擬合警告"
+                        )
+
         # Pareto 前緣
         pareto_front = tools.sortNondominated(population, len(population), first_front_only=True)[0]
 
@@ -1693,6 +1867,32 @@ class EvolutionEngine:
 
         # 輸出結果
         self._print_pareto_front(pareto_front)
+
+        # 🔬 最終樣本外測試
+        print(f"\n{'='*70}")
+        print(f"🔬 最終樣本外測試")
+        print(f"{'='*70}")
+
+        final_best = tools.selBest(pareto_front, 1)[0]
+        final_oos = run_oos_test(final_best, name=f"小小龍_W{WINDOW_ID}_Final")
+
+        if final_oos:
+            print_oos_comparison(final_oos)
+
+            # Discord 通知最終結果
+            train = final_oos['train']
+            test = final_oos['test']
+            overfit_flag = "🔴 過擬合" if final_oos['is_overfit'] else "🟢 通過"
+
+            notifier.send_embed(
+                f"🏆 小小龍 視窗{WINDOW_ID} 演化完成",
+                f"訓練期({TRAIN_START[:4]}~{TRAIN_END[:4]}): 夏普 {train['sharpe']:.3f}\n"
+                f"測試期({TEST_START[:4]}~{TEST_END[:4]}): 夏普 {test['sharpe']:.3f}\n"
+                f"測試/訓練比: {final_oos['sharpe_ratio']:.1%}\n"
+                f"胃納量: {train['capacity']/1e4:.0f}萬\n"
+                f"狀態: {overfit_flag}",
+                'success' if not final_oos['is_overfit'] else 'warning'
+            )
 
         return population, pareto_front
 

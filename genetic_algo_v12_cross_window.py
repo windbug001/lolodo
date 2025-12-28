@@ -2,8 +2,8 @@
 # -*- coding: utf-8 -*-
 """
 ================================================================================
-🧬 六組合快快龍 基因演算法優化系統 v12.2 (樣本外測試版)
-   新增：樣本外測試 (Out-of-Sample Testing) 防過擬合機制
+🧬 六組合快快龍 基因演算法優化系統 v12.3 (完整版)
+   統一功能：樣本外測試 + 斷點續傳 Checkpoint
 ================================================================================
 
 【v12.0 新增功能】
@@ -25,7 +25,13 @@
 ✅ 自動過擬合警告（測試/訓練比 < 60%）
 ✅ 最終報告包含完整樣本外測試結果
 
-版本：v12.2 OOS-Test (2025-12-28)
+【v12.3 新增功能 - 斷點續傳】
+✅ CheckpointManager 完整管理
+✅ 每5代自動保存 checkpoint
+✅ 重啟時自動從上次世代繼續
+✅ 保存/恢復隨機狀態確保可重現性
+
+版本：v12.3 Full-Featured (2025-12-28)
 ================================================================================
 """
 
@@ -128,7 +134,7 @@ OVERFIT_SHARPE_RATIO = 0.6   # 測試期夏普 / 訓練期夏普 < 0.6 則警告
 OVERFIT_RETURN_RATIO = 0.5   # 測試期報酬 / 訓練期報酬 < 0.5 則警告
 
 print(f"{'='*80}")
-print(f"🚀 六組合快快龍 v12.2 (樣本外測試版) - Window {WINDOW_ID}")
+print(f"🚀 六組合快快龍 v12.3 (完整版) - Window {WINDOW_ID}")
 print(f"   🎯 目標：夏普 >= {TARGET_SHARPE}, 胃納量 >= {MIN_CAPACITY/1e4:.0f}萬")
 print(f"   🔄 視窗交互：每 {CROSS_WINDOW_INTERVAL} 代交換 Top {CROSS_WINDOW_TOP_N} 基因")
 print(f"   📊 訓練期：{TRAIN_START} ~ {TRAIN_END}")
@@ -326,7 +332,7 @@ class DiscordNotifier:
 
         if self.enabled:
             try:
-                payload = {"content": f"✅ 六組合快快龍 v12.1 (3視窗交互+安全寫入版) - Window {WINDOW_ID} 啟動", "username": "快快龍"}
+                payload = {"content": f"✅ 六組合快快龍 v12.3 (完整版) - Window {WINDOW_ID} 啟動\n   訓練期: {TRAIN_START}~{TRAIN_END}\n   測試期: {TEST_START}~{TEST_END}", "username": "快快龍"}
                 requests.post(self.webhook_url, json=payload, timeout=5)
                 print("✅ Discord 通知系統已連接")
             except:
@@ -386,6 +392,96 @@ rsi = data.indicator("RSI", adjust_price=False, resample="D", timeperiod=14)
 
 print(f"✅ 數據載入完成 ({time.time()-data_start:.1f}秒)")
 print(f"   股票數: {len(close.columns)}, 期間: {close.index[0].date()} ~ {close.index[-1].date()}")
+
+# =============================================================================
+# 🔥 Checkpoint 管理器（支援斷點續傳）
+# =============================================================================
+class CheckpointManager:
+    """Checkpoint 管理器 - 支援斷點續傳"""
+
+    def __init__(self, window_id: int, base_dir: str):
+        self.window_id = window_id
+        self.checkpoint_dir = f"{base_dir}/window_{window_id}"
+        self.checkpoint_file = f"{self.checkpoint_dir}/checkpoint.pkl"
+        Path(self.checkpoint_dir).mkdir(parents=True, exist_ok=True)
+
+    def save(self, population, generation, halloffame=None, history=None):
+        """保存 checkpoint"""
+        try:
+            checkpoint_data = {
+                'population': [{'genes': list(ind), 'fitness': ind.fitness.values[0] if ind.fitness.valid else None}
+                              for ind in population],
+                'generation': generation,
+                'halloffame': [{'genes': list(ind), 'fitness': ind.fitness.values[0]}
+                              for ind in halloffame] if halloffame else [],
+                'history': history or [],
+                'random_state': random.getstate(),
+                'numpy_state': np.random.get_state(),
+                'timestamp': datetime.now().isoformat(),
+                'window_id': self.window_id
+            }
+
+            success = SafeFileManager.safe_pickle_save(checkpoint_data, self.checkpoint_file)
+            if success:
+                print(f"   💾 Checkpoint 已保存 (第 {generation} 代)")
+            return success
+
+        except Exception as e:
+            print(f"   ⚠️ Checkpoint 保存失敗: {e}")
+            return False
+
+    def load(self):
+        """載入 checkpoint"""
+        if not os.path.exists(self.checkpoint_file):
+            print("ℹ️ 無 checkpoint，從頭開始")
+            return None
+
+        try:
+            with open(self.checkpoint_file, 'rb') as f:
+                data = pickle.load(f)
+
+            # 驗證 checkpoint 有效性
+            if not data.get('population') or not data.get('generation'):
+                print("⚠️ Checkpoint 無效，從頭開始")
+                return None
+
+            # 恢復隨機狀態
+            if data.get('random_state'):
+                random.setstate(data['random_state'])
+            if data.get('numpy_state'):
+                np.random.set_state(data['numpy_state'])
+
+            print(f"✅ 從 checkpoint 恢復: 第 {data['generation']} 代, 族群 {len(data['population'])}")
+            print(f"   📅 保存時間: {data.get('timestamp', 'N/A')}")
+
+            return data
+
+        except Exception as e:
+            print(f"⚠️ Checkpoint 載入失敗: {e}")
+            return None
+
+    def exists(self) -> bool:
+        """檢查是否有 checkpoint"""
+        return os.path.exists(self.checkpoint_file)
+
+    def get_info(self):
+        """取得 checkpoint 資訊"""
+        if not self.exists():
+            return None
+
+        try:
+            with open(self.checkpoint_file, 'rb') as f:
+                data = pickle.load(f)
+            return {
+                'generation': data.get('generation', 0),
+                'timestamp': data.get('timestamp', 'N/A'),
+                'population_size': len(data.get('population', []))
+            }
+        except:
+            return None
+
+# 初始化 checkpoint 管理器（稍後初始化，需要 WINDOW_DIR）
+checkpoint_mgr = None
 
 # =============================================================================
 # 🔥 3視窗交互機制 - 核心功能
@@ -568,6 +664,10 @@ class CrossWindowManager:
 
 # 初始化跨視窗管理器
 cross_window_mgr = CrossWindowManager(BASE_DIR, WINDOW_ID, SHARED_DIR)
+
+# 初始化 checkpoint 管理器
+checkpoint_mgr = CheckpointManager(WINDOW_ID, BASE_DIR)
+print("✅ Checkpoint 管理器已初始化")
 
 # =============================================================================
 # 安全條件計算函數
@@ -1247,35 +1347,61 @@ class EvolutionEngine:
 
         notifier.send(f"🚀 **Window {WINDOW_ID} 開始演化**\n• {n_generations}代, 族群{POPULATION_SIZE}\n• 每{CROSS_WINDOW_INTERVAL}代交換基因")
 
-        # 初始化族群
-        population = toolbox.population(n=POPULATION_SIZE)
+        # 🔥 嘗試從 checkpoint 恢復
+        start_gen = 0
+        checkpoint_data = checkpoint_mgr.load()
 
-        # 注入歷史精英
-        if inject_elites:
-            historical_elites = load_historical_elites(top_n=30)
+        if checkpoint_data:
+            # 從 checkpoint 恢復族群
+            population = []
+            for ind_data in checkpoint_data['population']:
+                clean_gene = sanitize_gene(ind_data['genes'])
+                new_ind = creator.Individual(clean_gene)
+                if ind_data['fitness'] is not None:
+                    new_ind.fitness.values = (ind_data['fitness'],)
+                population.append(new_ind)
 
-            if historical_elites:
-                n_inject = min(len(historical_elites), POPULATION_SIZE // 2)
-                print(f"💉 注入 {n_inject} 個歷史精英到初始族群")
+            start_gen = checkpoint_data['generation']
+            self.history = checkpoint_data.get('history', [])
+            print(f"🔄 從第 {start_gen} 代繼續演化...")
+            print(f"   剩餘世代: {n_generations - start_gen}")
 
-                for i, elite_data in enumerate(historical_elites[:n_inject]):
-                    # 🔧 清理基因值（防止複數/NaN導致錯誤）
-                    clean_gene = sanitize_gene(elite_data['gene'])
-                    new_ind = creator.Individual(clean_gene)
-                    new_ind.fitness.values = (elite_data['fitness'],)
-                    population[i] = new_ind
+            # 重新評估沒有 fitness 的個體
+            invalid = [ind for ind in population if not ind.fitness.valid]
+            if invalid:
+                print(f"📊 重新評估 {len(invalid)} 個個體...")
+                for ind in tqdm(invalid, desc="重新評估", ncols=80):
+                    ind.fitness.values = toolbox.evaluate(ind)
+        else:
+            # 初始化族群
+            population = toolbox.population(n=POPULATION_SIZE)
 
-                if historical_elites[0]['fitness'] > 0:
-                    self.best_ever = sanitize_gene(historical_elites[0]['gene'])
-                    print(f"   🏆 最佳歷史基因適應度: {historical_elites[0]['fitness']:.4f}")
+            # 注入歷史精英
+            if inject_elites:
+                historical_elites = load_historical_elites(top_n=30)
 
-        print("📊 評估初始族群...")
-        for i, ind in enumerate(tqdm(population, desc="初始評估", ncols=80)):
-            if not ind.fitness.valid:
-                ind.fitness.values = toolbox.evaluate(ind)
+                if historical_elites:
+                    n_inject = min(len(historical_elites), POPULATION_SIZE // 2)
+                    print(f"💉 注入 {n_inject} 個歷史精英到初始族群")
 
-        # 演化
-        for gen in range(n_generations):
+                    for i, elite_data in enumerate(historical_elites[:n_inject]):
+                        # 🔧 清理基因值（防止複數/NaN導致錯誤）
+                        clean_gene = sanitize_gene(elite_data['gene'])
+                        new_ind = creator.Individual(clean_gene)
+                        new_ind.fitness.values = (elite_data['fitness'],)
+                        population[i] = new_ind
+
+                    if historical_elites[0]['fitness'] > 0:
+                        self.best_ever = sanitize_gene(historical_elites[0]['gene'])
+                        print(f"   🏆 最佳歷史基因適應度: {historical_elites[0]['fitness']:.4f}")
+
+            print("📊 評估初始族群...")
+            for i, ind in enumerate(tqdm(population, desc="初始評估", ncols=80)):
+                if not ind.fitness.valid:
+                    ind.fitness.values = toolbox.evaluate(ind)
+
+        # 演化（從 start_gen 繼續）
+        for gen in range(start_gen, n_generations):
             offspring = toolbox.select(population, len(population))
             offspring = list(map(toolbox.clone, offspring))
 
@@ -1315,6 +1441,16 @@ class EvolutionEngine:
                 for ind in population:
                     if not ind.fitness.valid:
                         ind.fitness.values = toolbox.evaluate(ind)
+
+            # 🔥 每 5 代保存 checkpoint
+            if (gen + 1) % 5 == 0:
+                halloffame = tools.selBest(population, 10)
+                checkpoint_mgr.save(
+                    population=population,
+                    generation=gen + 1,
+                    halloffame=halloffame,
+                    history=self.history
+                )
 
             # 每 5 代完整回測 + 樣本外測試
             if (gen + 1) % FULL_BACKTEST_INTERVAL == 0:
