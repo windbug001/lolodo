@@ -611,6 +611,110 @@ toolbox.register("select", tools.selTournament, tournsize=3)
 print("✅ DEAP GA 配置完成")
 
 # =============================================================================
+# 🔥 歷史精英載入（關鍵功能！）
+# =============================================================================
+def load_historical_elites(top_n=20):
+    """
+    從歷史檔案載入最佳基因
+    搜尋多個資料夾中的 checkpoint 檔案
+    """
+    print("\n🔍 搜尋歷史精英...")
+
+    # 搜尋路徑
+    search_paths = [
+        f'{BASE_DIR}/window_1',
+        f'{BASE_DIR}/window_2',
+        f'{BASE_DIR}/window_3',
+        f'{BASE_DIR}/shared_best',
+        '/content/drive/MyDrive/投資策略優化_六策略_修正版_2014/window_1',
+        '/content/drive/MyDrive/投資策略優化_六策略_修正版_2014/window_2',
+        '/content/drive/MyDrive/投資策略優化_六策略_修正版_2014/shared_best',
+        '/content/drive/MyDrive/投資策略優化_六策略純夏普值適應度_2014',
+        '/content/drive/MyDrive/投資策略優化_六策略純夏普值適應度_2014_分散式',
+        '/content/drive/MyDrive/投資策略優化_六策略_獨立版/window_1/working',
+        '/content/drive/MyDrive/投資策略優化_六策略_獨立版/window_2/working',
+        '/content/drive/MyDrive/投資策略優化_v10.0_終極版',
+        '/content/drive/MyDrive/投資策略優化_v11_六組合快快龍',
+    ]
+
+    all_individuals = []
+
+    for search_path in search_paths:
+        if not os.path.exists(search_path):
+            continue
+
+        print(f"   搜尋: {os.path.basename(search_path)}")
+
+        # 搜尋所有 .pkl 檔案
+        import glob
+        pkl_files = glob.glob(os.path.join(search_path, "**", "*.pkl"), recursive=True)
+
+        for file in pkl_files:
+            try:
+                with open(file, 'rb') as f:
+                    cp = pickle.load(f)
+
+                # 從 halloffame 載入
+                if "halloffame" in cp and cp["halloffame"]:
+                    for ind in cp["halloffame"]:
+                        if hasattr(ind, 'fitness') and ind.fitness.valid:
+                            fitness = ind.fitness.values[0]
+                            all_individuals.append({
+                                'gene': list(ind),
+                                'fitness': fitness,
+                                'source': file
+                            })
+
+                # 從 population 載入最佳
+                if "population" in cp and cp["population"]:
+                    for ind in cp["population"]:
+                        if hasattr(ind, 'fitness') and ind.fitness.valid:
+                            fitness = ind.fitness.values[0]
+                            if fitness > 2.0:  # 只取較好的
+                                all_individuals.append({
+                                    'gene': list(ind),
+                                    'fitness': fitness,
+                                    'source': file
+                                })
+
+                # 從 best_ever 載入
+                if "best_ever" in cp and cp["best_ever"]:
+                    gene = cp["best_ever"]
+                    if isinstance(gene, dict):
+                        gene = gene.get('gene', gene)
+                    if isinstance(gene, list):
+                        all_individuals.append({
+                            'gene': gene,
+                            'fitness': 5.0,  # 假設較高分數
+                            'source': file
+                        })
+
+            except Exception as e:
+                continue
+
+    # 去重並排序
+    seen_hashes = set()
+    unique_individuals = []
+
+    for ind in sorted(all_individuals, key=lambda x: x['fitness'], reverse=True):
+        import hashlib
+        gene_hash = hashlib.md5(str(ind['gene'][:30]).encode()).hexdigest()
+        if gene_hash not in seen_hashes:
+            seen_hashes.add(gene_hash)
+            unique_individuals.append(ind)
+
+    elites = unique_individuals[:top_n]
+
+    if elites:
+        print(f"✅ 找到 {len(elites)} 個歷史精英")
+        print(f"   最佳適應度: {elites[0]['fitness']:.4f}")
+        print(f"   來源: {os.path.basename(elites[0]['source'])}")
+    else:
+        print("⚠️ 未找到歷史精英，從頭開始")
+
+    return elites
+
+# =============================================================================
 # 進度追蹤器
 # =============================================================================
 class ProgressTracker:
@@ -656,7 +760,7 @@ class EvolutionEngine:
         self.best_metrics = None
         self.history = []
 
-    def run(self, n_generations=N_GENERATIONS):
+    def run(self, n_generations=N_GENERATIONS, inject_elites=True):
         print(f"\n{'='*80}")
         print(f"🚀 開始演化 - 共 {n_generations} 代, 族群 {POPULATION_SIZE}")
         print(f"{'='*80}\n")
@@ -666,8 +770,29 @@ class EvolutionEngine:
 
         notifier.send(f"🚀 開始演化: {n_generations}代, 族群{POPULATION_SIZE}")
 
-        # 初始化
+        # 初始化族群
         population = toolbox.population(n=POPULATION_SIZE)
+
+        # 🔥 注入歷史精英到初始族群
+        if inject_elites:
+            historical_elites = load_historical_elites(top_n=30)
+
+            if historical_elites:
+                n_inject = min(len(historical_elites), POPULATION_SIZE // 2)  # 最多注入一半
+                print(f"💉 注入 {n_inject} 個歷史精英到初始族群")
+
+                for i, elite_data in enumerate(historical_elites[:n_inject]):
+                    # 創建新個體並複製基因
+                    new_ind = creator.Individual(elite_data['gene'])
+                    # 設置預設適應度（會在評估時被覆蓋）
+                    new_ind.fitness.values = (elite_data['fitness'],)
+                    population[i] = new_ind
+
+                # 更新最佳記錄
+                if historical_elites[0]['fitness'] > 0:
+                    self.best_ever = historical_elites[0]['gene']
+                    print(f"   🏆 最佳歷史基因適應度: {historical_elites[0]['fitness']:.4f}")
+                    notifier.send(f"💉 注入 {n_inject} 個歷史精英，最佳適應度: {historical_elites[0]['fitness']:.4f}")
 
         print("📊 評估初始族群...")
         for i, ind in enumerate(tqdm(population, desc="初始評估", ncols=80)):
