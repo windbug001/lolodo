@@ -102,6 +102,10 @@ MIN_CAPACITY = 7_000_000
 MAX_DRAWDOWN = 0.17
 TARGET_ANNUAL_RETURN = 0.6
 
+# 🔥 持股配比約束
+MIN_POSITION_WEIGHT = 0.03  # 最小持股 3%
+POSITION_WEIGHT_STEP = 0.03  # 持股必須是 3% 倍數
+
 POPULATION_SIZE = 80
 N_GENERATIONS = 200
 MUTATION_RATE = 0.25
@@ -320,6 +324,69 @@ class SafeFileManager:
 # 創建全域安全檔案管理器
 safe_file_mgr = SafeFileManager()
 print("✅ 安全檔案管理器已初始化")
+
+# =============================================================================
+# 持股配比管理器（3% 倍數約束）
+# =============================================================================
+class PositionWeightManager:
+    """
+    持股配比管理器
+
+    功能：
+    1. 確保每隻股票至少 3%
+    2. 確保持股是 3% 倍數（3%, 6%, 9%, 12%...）
+    3. 低於 3% 的直接設為 0%
+    """
+
+    @staticmethod
+    def normalize_position(position_df) -> 'pd.DataFrame':
+        """
+        正規化持股比例
+
+        規則：
+        1. 每行獨立處理
+        2. 低於 3% 的設為 0
+        3. 剩餘的正規化並量化為 3% 倍數
+        """
+        if position_df is None or position_df.empty:
+            return position_df
+
+        result = position_df.copy()
+
+        for idx in result.index:
+            row = result.loc[idx]
+            row_sum = row.sum()
+
+            if row_sum == 0:
+                continue
+
+            # 正規化
+            normalized = row / row_sum
+
+            # 過濾低於 3% 的
+            filtered = normalized.where(normalized >= MIN_POSITION_WEIGHT, 0)
+
+            # 重新正規化剩餘的
+            filtered_sum = filtered.sum()
+            if filtered_sum > 0:
+                filtered = filtered / filtered_sum
+
+                # 量化為 3% 倍數
+                quantized = (filtered / POSITION_WEIGHT_STEP).round() * POSITION_WEIGHT_STEP
+
+                # 調整總和為 1
+                total = quantized.sum()
+                if total > 0 and abs(total - 1.0) > 0.01:
+                    max_col = quantized.idxmax()
+                    quantized[max_col] += (1.0 - total)
+
+                result.loc[idx] = quantized
+            else:
+                result.loc[idx] = 0
+
+        return result
+
+position_weight_mgr = PositionWeightManager()
 
 # =============================================================================
 # Discord 通知
@@ -959,6 +1026,9 @@ def run_backtest(gene, upload=False, name="Strategy"):
         if position.empty or position.sum().sum() == 0:
             return None
 
+        # 🔥 應用 3% 持股約束
+        position = position_weight_mgr.normalize_position(position)
+
         report = sim(
             position=position,
             stop_loss=params.get('stop_loss', 0.1),
@@ -1006,6 +1076,9 @@ def run_backtest_period(gene, start_date, end_date, name="Strategy"):
         position, params = combined_strategy(gene, start_date=start_date, end_date=end_date)
         if position.empty or position.sum().sum() == 0:
             return None
+
+        # 🔥 應用 3% 持股約束
+        position = position_weight_mgr.normalize_position(position)
 
         report = sim(
             position=position,
@@ -1114,6 +1187,9 @@ def evaluate_fitness(gene):
         position, params = combined_strategy(gene, start_date=TRAIN_START, end_date=TRAIN_END)
         if position.empty:
             return (0.0,)
+
+        # 🔥 應用 3% 持股約束
+        position = position_weight_mgr.normalize_position(position)
 
         report = sim(
             position=position,

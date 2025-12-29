@@ -90,6 +90,10 @@ MIN_CAPACITY = 5_000_000  # 500萬
 TARGET_ANNUAL_RETURN = 0.3
 MAX_DRAWDOWN = 0.2
 
+# 🔥 持股配比約束
+MIN_POSITION_WEIGHT = 0.03  # 最小持股 3%
+POSITION_WEIGHT_STEP = 0.03  # 持股必須是 3% 倍數
+
 # GA 演化參數
 POPULATION_SIZE = 50  # 較小的族群，因為 FinLab 回測較慢
 N_GENERATIONS = 100
@@ -691,6 +695,69 @@ class FinLabDataLoader:
 data_loader = FinLabDataLoader()
 
 # =============================================================================
+# 持股配比管理器（3% 倍數約束）
+# =============================================================================
+class PositionWeightManager:
+    """
+    持股配比管理器
+
+    功能：
+    1. 確保每隻股票至少 3%
+    2. 確保持股是 3% 倍數（3%, 6%, 9%, 12%...）
+    3. 低於 3% 的直接設為 0%
+    """
+
+    @staticmethod
+    def normalize_position(position_df: pd.DataFrame) -> pd.DataFrame:
+        """
+        正規化持股比例
+
+        規則：
+        1. 每行獨立處理
+        2. 低於 3% 的設為 0
+        3. 剩餘的正規化並量化為 3% 倍數
+        """
+        if position_df.empty:
+            return position_df
+
+        result = position_df.copy()
+
+        for idx in result.index:
+            row = result.loc[idx]
+            row_sum = row.sum()
+
+            if row_sum == 0:
+                continue
+
+            # 正規化
+            normalized = row / row_sum
+
+            # 過濾低於 3% 的
+            filtered = normalized.where(normalized >= MIN_POSITION_WEIGHT, 0)
+
+            # 重新正規化剩餘的
+            filtered_sum = filtered.sum()
+            if filtered_sum > 0:
+                filtered = filtered / filtered_sum
+
+                # 量化為 3% 倍數
+                quantized = (filtered / POSITION_WEIGHT_STEP).round() * POSITION_WEIGHT_STEP
+
+                # 調整總和為 1
+                total = quantized.sum()
+                if total > 0 and abs(total - 1.0) > 0.01:
+                    max_col = quantized.idxmax()
+                    quantized[max_col] += (1.0 - total)
+
+                result.loc[idx] = quantized
+            else:
+                result.loc[idx] = 0
+
+        return result
+
+position_weight_mgr = PositionWeightManager()
+
+# =============================================================================
 # 第五部分：策略引擎（基於您的原始策略）
 # =============================================================================
 class StrategyEngine:
@@ -1183,6 +1250,9 @@ class WalkForwardBacktest:
     def _backtest_single_window(self, position, params: Dict, name: str) -> Optional[Dict]:
         """單個窗口回測"""
         try:
+            # 🔥 應用 3% 持股約束
+            position = position_weight_mgr.normalize_position(position)
+
             report = sim(
                 position=position,
                 fee_ratio=1.425 / 1000,
@@ -1285,6 +1355,9 @@ def run_backtest_period(individual: List[float], start_date: str, end_date: str,
 
         if position.empty or position.sum().sum() == 0:
             return None
+
+        # 🔥 應用 3% 持股約束
+        position = position_weight_mgr.normalize_position(position)
 
         report = sim(
             position=position,
@@ -2009,6 +2082,9 @@ def main():
         try:
             print("\n執行完整回測...")
             position = strategy_engine.combine_strategies(best_params)
+
+            # 🔥 應用 3% 持股約束
+            position = position_weight_mgr.normalize_position(position)
 
             report = sim(
                 position=position,

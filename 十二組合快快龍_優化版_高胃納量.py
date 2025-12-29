@@ -111,6 +111,10 @@ MIN_CAPACITY = 10_000_000  # 強制最低胃納量 1000萬
 TARGET_SHARPE = 4.0        # 目標夏普值
 CAPACITY_PENALTY_WEIGHT = 0.5  # 胃納量懲罰權重
 
+# 🔥 持股配比約束
+MIN_POSITION_WEIGHT = 0.03  # 最小持股 3%
+POSITION_WEIGHT_STEP = 0.03  # 持股必須是 3% 倍數
+
 # ============================================================================
 # 🔄 定期回測設定
 # ============================================================================
@@ -348,6 +352,70 @@ class SafeFileManager:
             return False
 
 print("✅ 安全檔案管理器 (SafeFileManager) 已載入")
+
+
+# ============================================================================
+# 持股配比管理器（3% 倍數約束）
+# ============================================================================
+class PositionWeightManager:
+    """
+    持股配比管理器
+
+    功能：
+    1. 確保每隻股票至少 3%
+    2. 確保持股是 3% 倍數（3%, 6%, 9%, 12%...）
+    3. 低於 3% 的直接設為 0%
+    """
+
+    @staticmethod
+    def normalize_position(position_df) -> 'pd.DataFrame':
+        """
+        正規化持股比例
+
+        規則：
+        1. 每行獨立處理
+        2. 低於 3% 的設為 0
+        3. 剩餘的正規化並量化為 3% 倍數
+        """
+        if position_df is None or position_df.empty:
+            return position_df
+
+        result = position_df.copy()
+
+        for idx in result.index:
+            row = result.loc[idx]
+            row_sum = row.sum()
+
+            if row_sum == 0:
+                continue
+
+            # 正規化
+            normalized = row / row_sum
+
+            # 過濾低於 3% 的
+            filtered = normalized.where(normalized >= MIN_POSITION_WEIGHT, 0)
+
+            # 重新正規化剩餘的
+            filtered_sum = filtered.sum()
+            if filtered_sum > 0:
+                filtered = filtered / filtered_sum
+
+                # 量化為 3% 倍數
+                quantized = (filtered / POSITION_WEIGHT_STEP).round() * POSITION_WEIGHT_STEP
+
+                # 調整總和為 1
+                total = quantized.sum()
+                if total > 0 and abs(total - 1.0) > 0.01:
+                    max_col = quantized.idxmax()
+                    quantized[max_col] += (1.0 - total)
+
+                result.loc[idx] = quantized
+            else:
+                result.loc[idx] = 0
+
+        return result
+
+position_weight_mgr = PositionWeightManager()
 
 
 # ============================================================================
@@ -1617,6 +1685,9 @@ def evaluate_strategy(individual):
         if pd.notna(avg_capacity) and avg_capacity < MIN_CAPACITY:
             capacity_penalty = (MIN_CAPACITY - avg_capacity) / MIN_CAPACITY * CAPACITY_PENALTY_WEIGHT
 
+        # 🔥 應用 3% 持股約束
+        position_combined = position_weight_mgr.normalize_position(position_combined)
+
         report = sim(
             position=position_combined,
             stop_loss=overall_params['stop_loss'],
@@ -1677,6 +1748,9 @@ def run_backtest_period(individual, start_date, end_date, name="Strategy"):
         # 計算胃納量
         position_capacity = (position_combined * capacity).sum(axis=1)
         avg_capacity = position_capacity[position_capacity > 0].mean()
+
+        # 🔥 應用 3% 持股約束
+        position_combined = position_weight_mgr.normalize_position(position_combined)
 
         report = sim(
             position=position_combined,
@@ -1819,6 +1893,9 @@ def perform_full_backtest(individual, label, sharpe_value):
         position_capacity = (position_combined * capacity).sum(axis=1)
         avg_capacity = position_capacity[position_capacity > 0].mean()
         print(f"📊 平均胃納量: {avg_capacity/1e6:.2f}M TWD")
+
+        # 🔥 應用 3% 持股約束
+        position_combined = position_weight_mgr.normalize_position(position_combined)
 
         timestamp_str = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
         report = sim(
@@ -2040,6 +2117,9 @@ def backtest_top_n_historical(individuals, n=TOP_N_HISTORICAL):
             position_capacity = (position_combined * capacity).sum(axis=1)
             avg_capacity = position_capacity[position_capacity > 0].mean()
 
+            # 🔥 應用 3% 持股約束
+            position_combined = position_weight_mgr.normalize_position(position_combined)
+
             report = sim(
                 position=position_combined,
                 stop_loss=overall_params['stop_loss'],
@@ -2118,6 +2198,9 @@ def periodic_backtest(halloffame, generation, label="定期回測"):
         # 計算胃納量
         position_capacity = (position_combined * capacity).sum(axis=1)
         avg_capacity = position_capacity[position_capacity > 0].mean()
+
+        # 🔥 應用 3% 持股約束
+        position_combined = position_weight_mgr.normalize_position(position_combined)
 
         report = sim(
             position=position_combined,
@@ -2714,6 +2797,9 @@ def run_genetic_algorithm():
 
     best_ind = halloffame[0]
     position_combined, overall_params = combined_strategy_twelve(best_ind)
+
+    # 🔥 應用 3% 持股約束
+    position_combined = position_weight_mgr.normalize_position(position_combined)
 
     report = sim(
         position=position_combined,
