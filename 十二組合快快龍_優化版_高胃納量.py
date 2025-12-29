@@ -380,40 +380,47 @@ class PositionWeightManager:
         if position_df is None or position_df.empty:
             return position_df
 
-        result = position_df.copy()
+        try:
+            # 確保是數值型
+            result = position_df.astype(float).copy()
 
-        for idx in result.index:
-            row = result.loc[idx]
-            row_sum = row.sum()
+            for idx in result.index:
+                row = result.loc[idx].copy()
+                row_sum = row.sum()
 
-            if row_sum == 0:
-                continue
+                if row_sum == 0 or pd.isna(row_sum):
+                    continue
 
-            # 正規化
-            normalized = row / row_sum
+                # 正規化
+                normalized = row / row_sum
 
-            # 過濾低於 3% 的
-            filtered = normalized.where(normalized >= MIN_POSITION_WEIGHT, 0)
+                # 過濾低於 3% 的
+                filtered = normalized.where(normalized >= MIN_POSITION_WEIGHT, 0.0)
 
-            # 重新正規化剩餘的
-            filtered_sum = filtered.sum()
-            if filtered_sum > 0:
-                filtered = filtered / filtered_sum
+                # 重新正規化剩餘的
+                filtered_sum = filtered.sum()
+                if filtered_sum > 0:
+                    filtered = filtered / filtered_sum
 
-                # 量化為 3% 倍數
-                quantized = (filtered / POSITION_WEIGHT_STEP).round() * POSITION_WEIGHT_STEP
+                    # 量化為 3% 倍數
+                    quantized = (filtered / POSITION_WEIGHT_STEP).round() * POSITION_WEIGHT_STEP
 
-                # 調整總和為 1
-                total = quantized.sum()
-                if total > 0 and abs(total - 1.0) > 0.01:
-                    max_col = quantized.idxmax()
-                    quantized[max_col] += (1.0 - total)
+                    # 調整總和為 1
+                    total = quantized.sum()
+                    if total > 0 and abs(total - 1.0) > 0.01:
+                        max_col = quantized.idxmax()
+                        quantized.loc[max_col] += (1.0 - total)
 
-                result.loc[idx] = quantized
-            else:
-                result.loc[idx] = 0
+                    result.loc[idx] = quantized.values
+                else:
+                    result.loc[idx] = 0.0
 
-        return result
+            return result.astype(float)
+
+        except Exception as e:
+            # 如果處理失敗，返回原始 DataFrame
+            print(f"   ⚠️ 持股正規化失敗: {e}")
+            return position_df
 
 position_weight_mgr = PositionWeightManager()
 
