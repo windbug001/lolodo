@@ -1434,6 +1434,99 @@ def run_oos_test(individual: List[float], name: str = "OOS_Test") -> Optional[Di
     }
 
 
+def run_detailed_oos_test(individual: List[float], gen: int) -> Optional[Dict]:
+    """
+    🔬 執行詳細樣本外測試（顯示完整回測報告）
+
+    每 OOS_TEST_INTERVAL 代執行一次，顯示測試期的詳細回測結果
+    """
+    try:
+        # 解碼基因
+        params = gene_decoder.decode(individual)
+
+        # 組合策略
+        position = strategy_engine.combine_strategies(params)
+
+        if position is None or position.empty:
+            return None
+
+        # 🔥 應用 3% 持股約束
+        position = position_weight_mgr.normalize_position(position)
+
+        # === 訓練期回測（簡要） ===
+        train_position = position.loc[TRAIN_START:TRAIN_END]
+        if train_position.empty or train_position.sum().sum() == 0:
+            return None
+
+        train_report = sim(
+            position=train_position,
+            stop_loss=params.get('stop_loss', 0.25),
+            trail_stop=params.get('trail_stop', 0.35),
+            fee_ratio=1.425 / 1000,
+            tax_ratio=3 / 1000,
+            trade_at_price=params.get('trade_at_price', 'high_low_avg'),
+            position_limit=params.get('position_limit', 0.35),
+            take_profit=params.get('take_profit', 0.7),
+            upload=False,
+            name=f"小小龍_W{WINDOW_ID}_Gen{gen}_訓練期"
+        )
+
+        if train_report is None:
+            return None
+        train_metrics = train_report.get_metrics()
+        train_sharpe = train_metrics['ratio'].get('sharpeRatio', 0) or 0
+
+        # === 測試期回測（詳細顯示） ===
+        test_position = position.loc[TEST_START:TEST_END]
+        if test_position.empty or test_position.sum().sum() == 0:
+            return None
+
+        print(f"\n{'='*60}")
+        print(f"📊 第 {gen} 代 - 測試期詳細回測 ({TEST_START[:4]}~{TEST_END[:4]})")
+        print(f"{'='*60}")
+
+        test_report = sim(
+            position=test_position,
+            stop_loss=params.get('stop_loss', 0.25),
+            trail_stop=params.get('trail_stop', 0.35),
+            fee_ratio=1.425 / 1000,
+            tax_ratio=3 / 1000,
+            trade_at_price=params.get('trade_at_price', 'high_low_avg'),
+            position_limit=params.get('position_limit', 0.35),
+            take_profit=params.get('take_profit', 0.7),
+            upload=False,
+            name=f"小小龍_W{WINDOW_ID}_Gen{gen}_測試期"
+        )
+
+        if test_report is None:
+            return None
+
+        # 顯示詳細報告
+        test_report.display()
+
+        test_metrics = test_report.get_metrics()
+        test_sharpe = test_metrics['ratio'].get('sharpeRatio', 0) or 0
+
+        # 計算過擬合指標
+        sharpe_ratio = test_sharpe / train_sharpe if train_sharpe > 0 else 0
+        is_overfit = sharpe_ratio < OVERFIT_SHARPE_RATIO and train_sharpe > 1.0
+
+        print(f"\n📈 訓練期夏普: {train_sharpe:.3f}")
+        print(f"📈 測試期夏普: {test_sharpe:.3f}")
+        print(f"📊 測試/訓練比: {sharpe_ratio:.1%} {'🔴 過擬合警告' if is_overfit else '🟢 通過'}")
+
+        return {
+            'train_sharpe': train_sharpe,
+            'test_sharpe': test_sharpe,
+            'sharpe_ratio': sharpe_ratio,
+            'is_overfit': is_overfit
+        }
+
+    except Exception as e:
+        print(f"   ⚠️ 詳細OOS測試失敗: {e}")
+        return None
+
+
 def print_oos_comparison(oos_result: Optional[Dict]) -> None:
     """打印樣本外測試比較結果"""
     if oos_result is None:
@@ -1917,28 +2010,29 @@ class EvolutionEngine:
                 print(f"   穩健性: {stats['best_robustness']:.2f}")
                 print(f"   耗時: {elapsed:.1f}s")
 
-            # 🔬 每 OOS_TEST_INTERVAL 代執行樣本外測試
+            # 🔬 每 OOS_TEST_INTERVAL 代執行詳細樣本外測試
             if (gen + 1) % OOS_TEST_INTERVAL == 0:
                 best_ind = tools.selBest(population, 1)[0]
-                print(f"\n   🔬 執行樣本外測試...")
-                oos_result = run_oos_test(best_ind, name=f"Gen{gen+1}")
+                print(f"\n   🔬 執行詳細樣本外測試...")
+
+                # 使用新的詳細測試函數（顯示完整回測報告）
+                oos_result = run_detailed_oos_test(best_ind, gen + 1)
 
                 if oos_result:
-                    train_sharpe = oos_result['train']['sharpe']
-                    test_sharpe = oos_result['test']['sharpe']
-                    overfit_flag = "🔴" if oos_result['is_overfit'] else "🟢"
-
-                    print(f"      訓練期({TRAIN_START[:4]}~{TRAIN_END[:4]}): 夏普 {train_sharpe:.3f}")
-                    print(f"      測試期({TEST_START[:4]}~{TEST_END[:4]}): 夏普 {test_sharpe:.3f} {overfit_flag}")
-                    print(f"      測試/訓練比: {oos_result['sharpe_ratio']:.1%}")
-
                     # Discord 通知
                     if oos_result['is_overfit']:
                         notifier.send(
                             f"⚠️ 小小龍 視窗{WINDOW_ID} 第{gen+1}代\n"
-                            f"訓練期夏普: {train_sharpe:.3f}\n"
-                            f"測試期夏普: {test_sharpe:.3f}\n"
+                            f"訓練期夏普: {oos_result['train_sharpe']:.3f}\n"
+                            f"測試期夏普: {oos_result['test_sharpe']:.3f}\n"
                             f"比率: {oos_result['sharpe_ratio']:.1%} 🔴 過擬合警告"
+                        )
+                    else:
+                        notifier.send(
+                            f"✅ 小小龍 視窗{WINDOW_ID} 第{gen+1}代 OOS測試\n"
+                            f"訓練期夏普: {oos_result['train_sharpe']:.3f}\n"
+                            f"測試期夏普: {oos_result['test_sharpe']:.3f}\n"
+                            f"比率: {oos_result['sharpe_ratio']:.1%} 🟢 通過"
                         )
 
         # Pareto 前緣
@@ -2095,9 +2189,9 @@ def main():
             json.dump(best_params, f, indent=2)
         print(f"\n✅ 最佳參數已保存: {paths.best_params_file}")
 
-        # 完整回測
+        # 完整回測 + 上傳到 FinLab
         try:
-            print("\n執行完整回測...")
+            print("\n執行完整回測並上傳到 FinLab...")
             position = strategy_engine.combine_strategies(best_params)
 
             # 🔥 應用 3% 持股約束
@@ -2113,11 +2207,12 @@ def main():
                 trail_stop=best_params['trail_stop'],
                 take_profit=best_params['take_profit'],
                 stop_trading_next_period=False,
-                upload=False,
-                name=f'FinLab_GA_Ultimate_Best'
+                upload=True,  # 🔥 上傳到 FinLab（覆蓋舊版本）
+                name=f'小小龍_視窗{WINDOW_ID}_最佳策略'
             )
 
             report.display()
+            print(f"\n✅ 最佳策略已上傳到 FinLab: 小小龍_視窗{WINDOW_ID}_最佳策略")
         except Exception as e:
             print(f"⚠️ 完整回測失敗: {e}")
 

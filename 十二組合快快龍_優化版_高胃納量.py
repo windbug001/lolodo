@@ -1827,6 +1827,101 @@ def run_oos_test(individual, name="OOS_Test"):
     }
 
 
+def run_detailed_oos_test(individual, gen):
+    """
+    🔬 執行詳細樣本外測試（顯示完整回測報告）
+
+    每 N 代執行一次，顯示測試期的詳細回測結果
+    """
+    try:
+        # === 訓練期回測（簡要） ===
+        train_position, params = combined_strategy_twelve(
+            individual,
+            start_date_str=TRAIN_START,
+            end_date_str=TRAIN_END
+        )
+        if train_position.empty or train_position.sum().sum() == 0:
+            return None
+
+        # 🔥 應用 3% 持股約束
+        train_position = position_weight_mgr.normalize_position(train_position)
+
+        train_report = sim(
+            position=train_position,
+            stop_loss=params['stop_loss'],
+            trail_stop=params['trail_stop'],
+            fee_ratio=FEE_RATIO,
+            tax_ratio=TAX_RATIO,
+            trade_at_price=params['trade_at_price'],
+            position_limit=params['position_limit'],
+            take_profit=params['take_profit'],
+            upload=False,
+            name=f"天空龍_W{WINDOW_ID}_Gen{gen}_訓練期"
+        )
+
+        if train_report is None:
+            return None
+        train_metrics = train_report.get_metrics()
+        train_sharpe = train_metrics['ratio'].get('sharpeRatio', 0) or 0
+
+        # === 測試期回測（詳細顯示） ===
+        test_position, params = combined_strategy_twelve(
+            individual,
+            start_date_str=TEST_START,
+            end_date_str=TEST_END
+        )
+        if test_position.empty or test_position.sum().sum() == 0:
+            return None
+
+        # 🔥 應用 3% 持股約束
+        test_position = position_weight_mgr.normalize_position(test_position)
+
+        print(f"\n{'='*60}")
+        print(f"📊 第 {gen} 代 - 測試期詳細回測 ({TEST_START[:4]}~{TEST_END[:4]})")
+        print(f"{'='*60}")
+
+        test_report = sim(
+            position=test_position,
+            stop_loss=params['stop_loss'],
+            trail_stop=params['trail_stop'],
+            fee_ratio=FEE_RATIO,
+            tax_ratio=TAX_RATIO,
+            trade_at_price=params['trade_at_price'],
+            position_limit=params['position_limit'],
+            take_profit=params['take_profit'],
+            upload=False,
+            name=f"天空龍_W{WINDOW_ID}_Gen{gen}_測試期"
+        )
+
+        if test_report is None:
+            return None
+
+        # 顯示詳細報告
+        test_report.display()
+
+        test_metrics = test_report.get_metrics()
+        test_sharpe = test_metrics['ratio'].get('sharpeRatio', 0) or 0
+
+        # 計算過擬合指標
+        sharpe_ratio = test_sharpe / train_sharpe if train_sharpe > 0 else 0
+        is_overfit = sharpe_ratio < OVERFIT_SHARPE_RATIO and train_sharpe > 1.0
+
+        print(f"\n📈 訓練期夏普: {train_sharpe:.3f}")
+        print(f"📈 測試期夏普: {test_sharpe:.3f}")
+        print(f"📊 測試/訓練比: {sharpe_ratio:.1%} {'🔴 過擬合警告' if is_overfit else '🟢 通過'}")
+
+        return {
+            'train_sharpe': train_sharpe,
+            'test_sharpe': test_sharpe,
+            'sharpe_ratio': sharpe_ratio,
+            'is_overfit': is_overfit
+        }
+
+    except Exception as e:
+        print(f"   ⚠️ 詳細OOS測試失敗: {e}")
+        return None
+
+
 def print_oos_comparison(oos_result):
     """打印樣本外測試比較結果"""
     if oos_result is None:
@@ -1857,29 +1952,28 @@ def print_oos_comparison(oos_result):
 
 
 def perform_oos_backtest(individual, label, generation):
-    """執行樣本外測試並顯示詳細報告"""
+    """執行詳細樣本外測試並顯示完整回測報告"""
     print("\n" + "🔬"*30)
-    print(f"🔬 {label} - 樣本外測試 (第 {generation} 代)")
+    print(f"🔬 {label} - 詳細樣本外測試 (第 {generation} 代)")
     print("🔬"*30)
 
-    oos_result = run_oos_test(individual, name=f"Gen{generation}")
+    # 使用新的詳細測試函數（顯示完整回測報告）
+    oos_result = run_detailed_oos_test(individual, generation)
 
     if oos_result:
-        print_oos_comparison(oos_result)
-
         # Discord 通知
         if 'send_discord_notification' in globals():
             overfit_status = "🔴 過擬合警告" if oos_result['is_overfit'] else "🟢 測試通過"
             send_discord_notification(
-                f"🔬 視窗{WINDOW_ID} 樣本外測試 (第{generation}代)",
-                f"訓練期({TRAIN_START[:4]}~{TRAIN_END[:4]}): 夏普 {oos_result['train']['sharpe']:.3f}\n"
-                f"測試期({TEST_START[:4]}~{TEST_END[:4]}): 夏普 {oos_result['test']['sharpe']:.3f}\n"
+                f"🔬 天空龍 視窗{WINDOW_ID} 第{generation}代 OOS測試",
+                f"訓練期夏普: {oos_result['train_sharpe']:.3f}\n"
+                f"測試期夏普: {oos_result['test_sharpe']:.3f}\n"
                 f"比率: {oos_result['sharpe_ratio']:.1%} {overfit_status}"
             )
 
         return oos_result
     else:
-        print("   ⚠️ 樣本外測試失敗")
+        print("   ⚠️ 詳細樣本外測試失敗")
         return None
 
 
@@ -2808,6 +2902,7 @@ def run_genetic_algorithm():
     # 🔥 應用 3% 持股約束
     position_combined = position_weight_mgr.normalize_position(position_combined)
 
+    # 🔥 上傳到 FinLab（覆蓋舊版本）
     report = sim(
         position=position_combined,
         stop_loss=overall_params['stop_loss'],
@@ -2817,19 +2912,20 @@ def run_genetic_algorithm():
         trade_at_price=overall_params['trade_at_price'],
         position_limit=overall_params['position_limit'],
         take_profit=overall_params['take_profit'],
-        name=f"十二策略高胃納量最佳_視窗{WINDOW_ID}_夏普{best_ind.fitness.values[0]:.4f}",
+        name=f"天空龍_視窗{WINDOW_ID}_最佳策略",
         upload=True
     )
 
     if report:
         report.display()
+        print(f"\n✅ 最佳策略已上傳到 FinLab: 天空龍_視窗{WINDOW_ID}_最佳策略")
 
     # 🔬 最終樣本外測試
     print("\n" + "="*60)
     print("🔬 最終樣本外測試 - 檢測過擬合")
     print("="*60)
 
-    final_oos = run_oos_test(best_ind, name="Final")
+    final_oos = run_oos_test(best_ind, name="天空龍_Final")
     if final_oos:
         print_oos_comparison(final_oos)
 

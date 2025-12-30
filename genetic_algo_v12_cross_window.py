@@ -1156,6 +1156,93 @@ def run_oos_test(gene, name="OOS_Test"):
     }
 
 
+def run_detailed_oos_test(gene, gen):
+    """
+    🔬 執行詳細樣本外測試（顯示完整回測報告）
+
+    每 FULL_BACKTEST_INTERVAL 代執行一次，顯示測試期的詳細回測結果
+    """
+    try:
+        # === 訓練期回測（簡要） ===
+        train_position, params = combined_strategy(gene, start_date=TRAIN_START, end_date=TRAIN_END)
+        if train_position.empty or train_position.sum().sum() == 0:
+            return None
+
+        # 🔥 應用 3% 持股約束
+        train_position = position_weight_mgr.normalize_position(train_position)
+
+        train_report = sim(
+            position=train_position,
+            stop_loss=params.get('stop_loss', 0.1),
+            trail_stop=params.get('trail_stop', 0.05),
+            fee_ratio=FEE_RATIO,
+            tax_ratio=TAX_RATIO,
+            trade_at_price=params.get('trade_at_price', 'close'),
+            position_limit=params.get('position_limit', 0.3),
+            take_profit=params.get('take_profit', 0.3),
+            upload=False,
+            name=f"快快龍_W{WINDOW_ID}_Gen{gen}_訓練期"
+        )
+
+        if train_report is None:
+            return None
+        train_metrics = train_report.get_metrics()
+        train_sharpe = train_metrics['ratio'].get('sharpeRatio', 0) or 0
+
+        # === 測試期回測（詳細顯示） ===
+        test_position, params = combined_strategy(gene, start_date=TEST_START, end_date=TEST_END)
+        if test_position.empty or test_position.sum().sum() == 0:
+            return None
+
+        # 🔥 應用 3% 持股約束
+        test_position = position_weight_mgr.normalize_position(test_position)
+
+        print(f"\n{'='*60}")
+        print(f"📊 第 {gen} 代 - 測試期詳細回測 ({TEST_START[:4]}~{TEST_END[:4]})")
+        print(f"{'='*60}")
+
+        test_report = sim(
+            position=test_position,
+            stop_loss=params.get('stop_loss', 0.1),
+            trail_stop=params.get('trail_stop', 0.05),
+            fee_ratio=FEE_RATIO,
+            tax_ratio=TAX_RATIO,
+            trade_at_price=params.get('trade_at_price', 'close'),
+            position_limit=params.get('position_limit', 0.3),
+            take_profit=params.get('take_profit', 0.3),
+            upload=False,
+            name=f"快快龍_W{WINDOW_ID}_Gen{gen}_測試期"
+        )
+
+        if test_report is None:
+            return None
+
+        # 顯示詳細報告
+        test_report.display()
+
+        test_metrics = test_report.get_metrics()
+        test_sharpe = test_metrics['ratio'].get('sharpeRatio', 0) or 0
+
+        # 計算過擬合指標
+        sharpe_ratio = test_sharpe / train_sharpe if train_sharpe > 0 else 0
+        is_overfit = sharpe_ratio < OVERFIT_SHARPE_RATIO and train_sharpe > 1.0
+
+        print(f"\n📈 訓練期夏普: {train_sharpe:.3f}")
+        print(f"📈 測試期夏普: {test_sharpe:.3f}")
+        print(f"📊 測試/訓練比: {sharpe_ratio:.1%} {'🔴 過擬合警告' if is_overfit else '🟢 通過'}")
+
+        return {
+            'train_sharpe': train_sharpe,
+            'test_sharpe': test_sharpe,
+            'sharpe_ratio': sharpe_ratio,
+            'is_overfit': is_overfit
+        }
+
+    except Exception as e:
+        print(f"   ⚠️ 詳細OOS測試失敗: {e}")
+        return None
+
+
 def print_oos_comparison(oos_result):
     """打印樣本外測試比較結果"""
     if oos_result is None:
@@ -1535,38 +1622,44 @@ class EvolutionEngine:
                     history=self.history
                 )
 
-            # 每 5 代完整回測 + 樣本外測試
+            # 每 5 代完整回測 + 詳細樣本外測試
             if (gen + 1) % FULL_BACKTEST_INTERVAL == 0:
-                print(f"\n📊 第 {gen+1} 代 - 樣本外測試...")
+                print(f"\n📊 第 {gen+1} 代 - 詳細樣本外測試...")
 
-                # 🔬 執行樣本外測試
-                oos_result = run_oos_test(best_ind, name=f"Gen{gen+1}")
+                # 🔬 執行詳細樣本外測試（顯示完整回測報告）
+                oos_result = run_detailed_oos_test(best_ind, gen + 1)
 
                 if oos_result:
-                    train_sharpe = oos_result['train']['sharpe']
-                    test_sharpe = oos_result['test']['sharpe']
+                    train_sharpe = oos_result['train_sharpe']
+                    test_sharpe = oos_result['test_sharpe']
 
                     is_best = self.best_metrics is None or train_sharpe > self.best_metrics.get('sharpe', 0)
 
                     if is_best:
                         self.best_ever = list(best_ind)
-                        self.best_metrics = oos_result['train']
+                        self.best_metrics = {'sharpe': train_sharpe}
                         self.best_metrics['test_sharpe'] = test_sharpe
                         self.best_metrics['sharpe_ratio'] = oos_result['sharpe_ratio']
 
-                        # 顯示訓練期 vs 測試期
+                        # Discord 通知新最佳
                         overfit_flag = "🔴" if oos_result['is_overfit'] else "🟢"
-                        print(f"   🏆 新最佳!")
-                        print(f"      訓練期({TRAIN_START[:4]}~{TRAIN_END[:4]}): 夏普 {train_sharpe:.3f}")
-                        print(f"      測試期({TEST_START[:4]}~{TEST_END[:4]}): 夏普 {test_sharpe:.3f} {overfit_flag}")
-                        print(f"      測試/訓練比: {oos_result['sharpe_ratio']:.1%}")
+                        print(f"\n   🏆 新最佳!")
 
                         notifier.send_embed(
-                            f"🏆 Window {WINDOW_ID} 新最佳",
+                            f"🏆 快快龍 W{WINDOW_ID} 第{gen+1}代 新最佳",
                             f"訓練期夏普: {train_sharpe:.3f}\n"
                             f"測試期夏普: {test_sharpe:.3f}\n"
                             f"比率: {oos_result['sharpe_ratio']:.1%} {overfit_flag}",
                             'success' if not oos_result['is_overfit'] else 'warning'
+                        )
+                    else:
+                        # 非新最佳也發送通知
+                        overfit_flag = "🔴" if oos_result['is_overfit'] else "🟢"
+                        notifier.send(
+                            f"✅ 快快龍 W{WINDOW_ID} 第{gen+1}代 OOS測試\n"
+                            f"訓練期夏普: {train_sharpe:.3f}\n"
+                            f"測試期夏普: {test_sharpe:.3f}\n"
+                            f"比率: {oos_result['sharpe_ratio']:.1%} {overfit_flag}"
                         )
 
             # 每 20 代發送進度 + 顯示各視窗狀態
@@ -1586,10 +1679,11 @@ class EvolutionEngine:
         final_best = tools.selBest(population, 1)[0]
 
         # 🔬 執行最終樣本外測試
-        final_oos = run_oos_test(final_best, name=f"GA_v12_W{WINDOW_ID}_Final")
+        final_oos = run_oos_test(final_best, name=f"快快龍_視窗{WINDOW_ID}_Final")
 
-        # 同時上傳完整期間的回測
-        final_result = run_backtest(final_best, upload=True, name=f"GA_v12_W{WINDOW_ID}_Final")
+        # 同時上傳完整期間的回測到 FinLab（覆蓋舊版本）
+        final_result = run_backtest(final_best, upload=True, name=f"快快龍_視窗{WINDOW_ID}_最佳策略")
+        print(f"\n✅ 最佳策略已上傳到 FinLab: 快快龍_視窗{WINDOW_ID}_最佳策略")
 
         if final_oos:
             print(f"\n{'='*60}")
