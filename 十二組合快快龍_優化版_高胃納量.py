@@ -564,7 +564,16 @@ class IndependentDataManager:
             # 籌碼資料
             data_dict['融資使用率'] = data.get('margin_transactions:融資使用率')
             data_dict['董監持有股數占比'] = data.get("internal_equity_changes:董監持有股數占比")
-            data_dict['inventory'] = data.get("inventory")
+
+            # inventory 資料較大，記憶體不足時跳過
+            try:
+                data_dict['inventory'] = data.get("inventory")
+            except (MemoryError, Exception) as e:
+                if 'memory' in str(e).lower() or 'allocate' in str(e).lower():
+                    print(f"⚠️ 視窗 {self.window_id}: inventory 資料太大，跳過載入（記憶體不足）")
+                    data_dict['inventory'] = None
+                else:
+                    raise e
 
             # 市值資料
             data_dict['市值'] = self._clean_data(data.get('etl:market_value'))
@@ -991,36 +1000,41 @@ print("\n🔄 預先計算昂貴指標...")
 precompute_start = time.time()
 
 # 預先計算 small_inv_under50 - 這個操作非常昂貴，只需計算一次
-try:
-    PRECOMPUTED_SMALL_INV = (inventory[(inventory.持股分級.astype(int) <= 8)]
-                              .reset_index()
-                              .groupby(["date", "stock_id"])
-                              .agg({"占集保庫存數比例": "sum"})
-                              .reset_index()
-                              .pivot(index="date", columns="stock_id", values="占集保庫存數比例")) <= 46
-    print(f"✅ small_inv_under50 預計算完成")
-except Exception as e:
-    print(f"⚠️ small_inv_under50 預計算失敗: {e}")
-    PRECOMPUTED_SMALL_INV = None
-
-# 預先計算不同持股分級的 inventory 數據（用於 boss_inventory）
+PRECOMPUTED_SMALL_INV = None
 PRECOMPUTED_INVENTORY_BY_LEVEL = {}
-try:
-    for min_level in range(9, 16):
-        for max_level in range(min_level, 16):
-            key = (min_level, max_level)
-            filtered = inventory[(inventory.持股分級.astype(int) >= min_level) &
-                                (inventory.持股分級.astype(int) <= max_level)]
-            if not filtered.empty:
-                PRECOMPUTED_INVENTORY_BY_LEVEL[key] = (filtered
-                    .reset_index()
-                    .groupby(["date", "stock_id"])
-                    .agg({"占集保庫存數比例": "sum"})
-                    .reset_index()
-                    .pivot(index="date", columns="stock_id", values="占集保庫存數比例"))
-    print(f"✅ boss_inventory 預計算完成 ({len(PRECOMPUTED_INVENTORY_BY_LEVEL)} 個組合)")
-except Exception as e:
-    print(f"⚠️ boss_inventory 預計算失敗: {e}")
+
+if inventory is not None:
+    try:
+        PRECOMPUTED_SMALL_INV = (inventory[(inventory.持股分級.astype(int) <= 8)]
+                                  .reset_index()
+                                  .groupby(["date", "stock_id"])
+                                  .agg({"占集保庫存數比例": "sum"})
+                                  .reset_index()
+                                  .pivot(index="date", columns="stock_id", values="占集保庫存數比例")) <= 46
+        print(f"✅ small_inv_under50 預計算完成")
+    except Exception as e:
+        print(f"⚠️ small_inv_under50 預計算失敗: {e}")
+        PRECOMPUTED_SMALL_INV = None
+
+    # 預先計算不同持股分級的 inventory 數據（用於 boss_inventory）
+    try:
+        for min_level in range(9, 16):
+            for max_level in range(min_level, 16):
+                key = (min_level, max_level)
+                filtered = inventory[(inventory.持股分級.astype(int) >= min_level) &
+                                    (inventory.持股分級.astype(int) <= max_level)]
+                if not filtered.empty:
+                    PRECOMPUTED_INVENTORY_BY_LEVEL[key] = (filtered
+                        .reset_index()
+                        .groupby(["date", "stock_id"])
+                        .agg({"占集保庫存數比例": "sum"})
+                        .reset_index()
+                        .pivot(index="date", columns="stock_id", values="占集保庫存數比例"))
+        print(f"✅ boss_inventory 預計算完成 ({len(PRECOMPUTED_INVENTORY_BY_LEVEL)} 個組合)")
+    except Exception as e:
+        print(f"⚠️ boss_inventory 預計算失敗: {e}")
+else:
+    print("⚠️ inventory 資料未載入，跳過大股東持股預計算（策略 4 將使用替代條件）")
 
 precompute_time = time.time() - precompute_start
 print(f"✅ 預計算完成，耗時 {precompute_time:.1f} 秒")
@@ -1180,8 +1194,8 @@ def strategy_revenue_price_turbo(params):
     boss_key = (int(params['boss_min_level']), int(params['boss_max_level']))
     if boss_key in PRECOMPUTED_INVENTORY_BY_LEVEL:
         boss_inventory_over400 = PRECOMPUTED_INVENTORY_BY_LEVEL[boss_key] >= params['min_boss_ratio']
-    else:
-        # 如果沒有預計算，使用原始計算（較少發生）
+    elif inventory is not None:
+        # 如果沒有預計算但有 inventory，使用原始計算
         boss_inventory_over400 = (inventory[(inventory.持股分級.astype(int) >= params['boss_min_level']) &
                                             (inventory.持股分級.astype(int) <= params['boss_max_level'])]
                                 .reset_index()
@@ -1189,6 +1203,9 @@ def strategy_revenue_price_turbo(params):
                                 .agg({"占集保庫存數比例": "sum"})
                                 .reset_index()
                                 .pivot(index="date", columns="stock_id", values="占集保庫存數比例")) >= params['min_boss_ratio']
+    else:
+        # inventory 未載入時，使用替代條件（董監持股）
+        boss_inventory_over400 = 董監持有股數占比 >= 10  # 董監持股 >= 10% 作為替代
 
     pe_limit = params['pe_limit']
     pe_range_1 = (pe_limit <= pe)
