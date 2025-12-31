@@ -455,14 +455,24 @@ class DiscordNotifier:
         self.enabled = True
         self.start_time = None
 
-        if self.enabled:
+        if self.enabled and webhook_url:
             try:
-                payload = {"content": f"✅ 十二組合快快龍 v2.1 (完整版) - 視窗 {WINDOW_ID} 啟動\n   訓練期: {TRAIN_START}~{TRAIN_END}\n   測試期: {TEST_START}~{TEST_END}", "username": "天空龍"}
-                requests.post(self.webhook_url, json=payload, timeout=5)
-                print("✅ Discord 通知系統已連接")
-            except:
+                payload = {"content": f"✅ 天空龍 視窗 {WINDOW_ID} 啟動\n🎯 目標: 夏普 {TARGET_SHARPE}+ | 胃納量 {MIN_CAPACITY/1e6:.0f}M+\n📅 訓練期: {TRAIN_START}~{TRAIN_END}\n🔬 測試期: {TEST_START}~{TEST_END}", "username": "天空龍"}
+                response = requests.post(self.webhook_url, json=payload, timeout=10)
+                if response.status_code == 204:
+                    print("✅ Discord 通知系統已連接")
+                else:
+                    print(f"⚠️ Discord 回應異常: {response.status_code}")
+                    self.enabled = False
+            except requests.exceptions.Timeout:
                 self.enabled = False
-                print("⚠️ Discord 通知系統未連接")
+                print("⚠️ Discord 連接超時（網路問題）")
+            except requests.exceptions.ConnectionError:
+                self.enabled = False
+                print("⚠️ Discord 連接失敗（網路問題）")
+            except Exception as e:
+                self.enabled = False
+                print(f"⚠️ Discord 通知系統未連接: {e}")
 
     def send(self, message):
         """發送簡單訊息"""
