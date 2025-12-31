@@ -60,6 +60,7 @@ import json
 import threading
 from pathlib import Path
 import shutil
+import requests  # 🔥 Discord 通知需要
 from contextlib import contextmanager
 import copy
 import glob
