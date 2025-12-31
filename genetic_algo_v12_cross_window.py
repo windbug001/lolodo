@@ -1594,24 +1594,33 @@ class EvolutionEngine:
                 historical_elites = load_historical_elites(top_n=30)
 
                 if historical_elites:
-                    n_inject = min(len(historical_elites), POPULATION_SIZE // 2)
-                    print(f"💉 注入 {n_inject} 個歷史精英到初始族群")
+                    # 🔥 注入 80% 歷史精英（提高比例，加速收斂）
+                    n_inject = min(len(historical_elites), int(POPULATION_SIZE * 0.8))
+                    print(f"💉 注入 {n_inject} 個歷史精英到初始族群（80%）")
+                    print(f"   🔄 將使用新功能（3%選股、OOS測試）重新評估所有個體")
 
                     for i, elite_data in enumerate(historical_elites[:n_inject]):
                         # 🔧 清理基因值（防止複數/NaN導致錯誤）
                         clean_gene = sanitize_gene(elite_data['gene'])
                         new_ind = creator.Individual(clean_gene)
-                        new_ind.fitness.values = (elite_data['fitness'],)
+                        # 🔥 不設定 fitness，強制重新評估！
+                        # new_ind.fitness.values = (elite_data['fitness'],)  # 移除這行
                         population[i] = new_ind
+
+                    print(f"   📊 歷史最佳（舊評估）: {historical_elites[0]['fitness']:.4f}")
+                    print(f"   ⚠️ 注意：新評估結果可能不同（因為新功能約束）")
 
                     if historical_elites[0]['fitness'] > 0:
                         self.best_ever = sanitize_gene(historical_elites[0]['gene'])
-                        print(f"   🏆 最佳歷史基因適應度: {historical_elites[0]['fitness']:.4f}")
 
-            print("📊 評估初始族群...")
-            for i, ind in enumerate(tqdm(population, desc="初始評估", ncols=80)):
-                if not ind.fitness.valid:
-                    ind.fitness.values = toolbox.evaluate(ind)
+            # 🔥 強制重新評估所有個體（使用新功能：3%選股、OOS測試等）
+            print("📊 使用新功能重新評估所有個體...")
+            for i, ind in enumerate(tqdm(population, desc="新功能評估", ncols=80)):
+                ind.fitness.values = toolbox.evaluate(ind)  # 強制評估所有個體
+
+            # 顯示重新評估後的最佳結果
+            best_after_eval = tools.selBest(population, 1)[0]
+            print(f"   ✅ 重新評估後最佳適應度: {best_after_eval.fitness.values[0]:.4f}")
 
         # 演化（從 start_gen 繼續）
         for gen in range(start_gen, n_generations):
