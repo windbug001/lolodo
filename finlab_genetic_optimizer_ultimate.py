@@ -88,7 +88,7 @@ DISCORD_WEBHOOK_URL = "https://discord.com/api/webhooks/1429310065877323796/U8le
 TARGET_SHARPE = 4.0
 MIN_CAPACITY = 5_000_000  # 500萬
 TARGET_ANNUAL_RETURN = 0.3
-MAX_DRAWDOWN = 0.17  # 最大回檔 17%
+MAX_DRAWDOWN = 0.15  # 最大回檔 15% (收緊以提升夏普)
 
 # 🔥 持股配比約束
 MIN_POSITION_WEIGHT = 0.03  # 最小持股 3%
@@ -96,7 +96,7 @@ POSITION_WEIGHT_STEP = 0.03  # 持股必須是 3% 倍數
 
 # GA 演化參數
 POPULATION_SIZE = 50  # 較小的族群，因為 FinLab 回測較慢
-N_GENERATIONS = 100
+N_GENERATIONS = 200   # 🔥 增加至 200 代
 MUTATION_RATE = 0.2
 CROSSOVER_RATE = 0.8
 
@@ -764,6 +764,103 @@ class PositionWeightManager:
 
 position_weight_mgr = PositionWeightManager()
 
+
+# =============================================================================
+# 🔥 波動率過濾器（高波動時減倉，提升夏普）
+# =============================================================================
+class VolatilityFilter:
+    """
+    波動率過濾器
+
+    功能：
+    1. 高波動時減少持股，降低回檔
+    2. 極端波動時大幅減倉
+    3. 保護資金在市場動盪時期
+    """
+
+    # 波動率閾值設定
+    VOL_HIGH_THRESHOLD = 0.25      # 年化波動 > 25% 時減倉
+    VOL_EXTREME_THRESHOLD = 0.35   # 年化波動 > 35% 時大幅減倉
+    VOL_HIGH_SCALE = 0.6           # 高波動時保留 60%
+    VOL_EXTREME_SCALE = 0.3        # 極端波動時保留 30%
+    VOL_LOOKBACK = 20              # 計算波動率的回看天數
+
+    def __init__(self):
+        self._volatility_cache = None
+        self._cache_date = None
+
+    def _calculate_market_volatility(self, close_df: pd.DataFrame) -> pd.Series:
+        """計算大盤波動率"""
+        # 使用 0050 作為大盤代理，如果沒有就用所有股票的平均
+        if '0050' in close_df.columns:
+            market = close_df['0050']
+        else:
+            market = close_df.mean(axis=1)
+
+        # 計算日報酬率
+        returns = market.pct_change()
+
+        # 計算滾動波動率（年化）
+        volatility = returns.rolling(self.VOL_LOOKBACK).std() * (252 ** 0.5)
+
+        return volatility
+
+    def apply_filter(self, position_df: pd.DataFrame, close_df: pd.DataFrame) -> pd.DataFrame:
+        """
+        根據市場波動率調整持股
+
+        Args:
+            position_df: 持股 DataFrame
+            close_df: 收盤價 DataFrame
+
+        Returns:
+            調整後的持股 DataFrame
+        """
+        if position_df is None or position_df.empty:
+            return position_df
+
+        try:
+            # 計算市場波動率
+            volatility = self._calculate_market_volatility(close_df)
+
+            # 複製持股
+            result = position_df.copy()
+
+            # 統計調整次數
+            high_vol_count = 0
+            extreme_vol_count = 0
+
+            for date in result.index:
+                if date not in volatility.index:
+                    continue
+
+                vol = volatility.loc[date]
+
+                if pd.isna(vol):
+                    continue
+
+                if vol > self.VOL_EXTREME_THRESHOLD:
+                    # 極端波動：大幅減倉
+                    result.loc[date] *= self.VOL_EXTREME_SCALE
+                    extreme_vol_count += 1
+                elif vol > self.VOL_HIGH_THRESHOLD:
+                    # 高波動：適度減倉
+                    result.loc[date] *= self.VOL_HIGH_SCALE
+                    high_vol_count += 1
+
+            # 輸出統計（僅在有調整時）
+            if high_vol_count > 0 or extreme_vol_count > 0:
+                print(f"   📉 波動率過濾: 高波動{high_vol_count}天, 極端{extreme_vol_count}天")
+
+            return result
+
+        except Exception as e:
+            print(f"   ⚠️ 波動率過濾失敗: {e}")
+            return position_df
+
+volatility_filter = VolatilityFilter()
+
+
 # =============================================================================
 # 第五部分：策略引擎（基於您的原始策略）
 # =============================================================================
@@ -1257,6 +1354,11 @@ class WalkForwardBacktest:
     def _backtest_single_window(self, position, params: Dict, name: str) -> Optional[Dict]:
         """單個窗口回測"""
         try:
+            # 🔥 應用波動率過濾（高波動時減倉）
+            close_df = data_loader.get('close')
+            if close_df is not None:
+                position = volatility_filter.apply_filter(position, close_df)
+
             # 🔥 應用 3% 持股約束
             position = position_weight_mgr.normalize_position(position)
 
@@ -1363,6 +1465,11 @@ def run_backtest_period(individual: List[float], start_date: str, end_date: str,
         if position.empty or position.sum().sum() == 0:
             return None
 
+        # 🔥 應用波動率過濾（高波動時減倉）
+        close_df = data_loader.get('close')
+        if close_df is not None:
+            position = volatility_filter.apply_filter(position, close_df)
+
         # 🔥 應用 3% 持股約束
         position = position_weight_mgr.normalize_position(position)
 
@@ -1449,6 +1556,11 @@ def run_detailed_oos_test(individual: List[float], gen: int) -> Optional[Dict]:
 
         if position is None or position.empty:
             return None
+
+        # 🔥 應用波動率過濾（高波動時減倉）
+        close_df = data_loader.get('close')
+        if close_df is not None:
+            position = volatility_filter.apply_filter(position, close_df)
 
         # 🔥 應用 3% 持股約束
         position = position_weight_mgr.normalize_position(position)
@@ -1586,9 +1698,9 @@ def evaluate_fitness(individual: List[float]) -> Tuple[float, float, float, floa
         annual_return = overall['annual_return']
         max_drawdown = overall.get('max_drawdown', 0)
 
-        # 🔥 回檔硬限制：超過 17% 直接給極低分
+        # 🔥 回檔硬限制：超過 15% 直接給極低分（加重懲罰以提升夏普）
         if max_drawdown > MAX_DRAWDOWN:
-            drawdown_penalty = -5.0 * (max_drawdown - MAX_DRAWDOWN) / MAX_DRAWDOWN
+            drawdown_penalty = -10.0 * (max_drawdown - MAX_DRAWDOWN) / MAX_DRAWDOWN
         else:
             drawdown_penalty = 0.0
 
@@ -2193,6 +2305,11 @@ def main():
         try:
             print("\n執行完整回測並上傳到 FinLab...")
             position = strategy_engine.combine_strategies(best_params)
+
+            # 🔥 應用波動率過濾（高波動時減倉）
+            close_df = data_loader.get('close')
+            if close_df is not None:
+                position = volatility_filter.apply_filter(position, close_df)
 
             # 🔥 應用 3% 持股約束
             position = position_weight_mgr.normalize_position(position)
