@@ -633,10 +633,56 @@ print(f"PID: {os.getpid()}")
 print(f"時間: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
 print(f"{'='*60}")
 
+# =============================================================================
+# 🔥 環境檢測與路徑設定
+# =============================================================================
+def detect_google_drive_path():
+    """
+    自動偵測本地 Google Drive 路徑
+    支援 Windows Google Drive for Desktop
+    """
+    import platform
+
+    if platform.system() == 'Windows':
+        # Windows 常見 Google Drive 路徑
+        possible_paths = [
+            os.path.expanduser('~/Google Drive'),
+            os.path.expanduser('~/Google 雲端硬碟'),
+            'G:/My Drive',
+            'G:/我的雲端硬碟',
+            'D:/Google Drive',
+            'D:/My Drive',
+            os.path.expandvars('%USERPROFILE%/Google Drive'),
+        ]
+
+        # 也檢查所有磁碟機
+        for drive_letter in 'DEFGHIJ':
+            possible_paths.append(f'{drive_letter}:/My Drive')
+            possible_paths.append(f'{drive_letter}:/我的雲端硬碟')
+            possible_paths.append(f'{drive_letter}:/Google Drive')
+
+        for path in possible_paths:
+            if os.path.exists(path):
+                print(f"✅ 偵測到 Google Drive: {path}")
+                return path
+    else:
+        # Linux/Mac
+        possible_paths = [
+            os.path.expanduser('~/Google Drive'),
+            os.path.expanduser('~/google-drive'),
+            '/mnt/google-drive',
+        ]
+        for path in possible_paths:
+            if os.path.exists(path):
+                return path
+
+    return None
+
 # Colab 環境設定
 if 'google.colab' in sys.modules:
     from google.colab import drive
     drive.mount('/content/drive')
+    IN_COLAB = True
 
     BASE_PATH = '/content/drive/MyDrive/投資策略優化_十二策略_高胃納量版'
     WINDOW_PATH = f'{BASE_PATH}/window_{WINDOW_ID}'
@@ -659,18 +705,46 @@ if 'google.colab' in sys.modules:
         '/content/drive/MyDrive/投資策略優化_十二策略_統一版'
     ]
 else:
-    BASE_PATH = '.'
-    WINDOW_PATH = f'./window_{WINDOW_ID}'
-    DRIVE_PATH = f'{WINDOW_PATH}/working'
-    CACHE_PATH = f'{WINDOW_PATH}/cache'
-    CHECKPOINT_PATH = f'{WINDOW_PATH}/checkpoints'
-    LOG_PATH = f'{WINDOW_PATH}/logs'
-    SHARED_PATH = './shared_best'
-    ADDITIONAL_SEARCH_PATHS = []
+    # 🔥 本地執行模式（VS Code / 命令列）
+    IN_COLAB = False
+
+    # 優先使用環境變數指定的路徑
+    GOOGLE_DRIVE_PATH = os.environ.get('GOOGLE_DRIVE_PATH', None)
+
+    if GOOGLE_DRIVE_PATH is None:
+        # 自動偵測 Google Drive
+        GOOGLE_DRIVE_PATH = detect_google_drive_path()
+
+    if GOOGLE_DRIVE_PATH and os.path.exists(GOOGLE_DRIVE_PATH):
+        # 🔥 使用 Google Drive 共享（與 Colab 同步）
+        print(f"📁 使用 Google Drive: {GOOGLE_DRIVE_PATH}")
+        BASE_PATH = os.path.join(GOOGLE_DRIVE_PATH, '投資策略優化_十二策略_高胃納量版')
+        SHARED_PATH = os.path.join(BASE_PATH, 'shared_best')
+        ADDITIONAL_SEARCH_PATHS = [
+            os.path.join(GOOGLE_DRIVE_PATH, '投資策略優化_十二策略_獨立版'),
+            os.path.join(GOOGLE_DRIVE_PATH, '投資策略優化_十二策略_統一版')
+        ]
+    else:
+        # 本地模式（無 Google Drive）
+        print("⚠️ 未偵測到 Google Drive，使用本地目錄")
+        print("   提示：設定環境變數 GOOGLE_DRIVE_PATH 指定 Google Drive 路徑")
+        BASE_PATH = '.'
+        SHARED_PATH = './shared_best'
+        ADDITIONAL_SEARCH_PATHS = []
+
+    WINDOW_PATH = os.path.join(BASE_PATH, f'window_{WINDOW_ID}')
+    DRIVE_PATH = os.path.join(WINDOW_PATH, 'working')
+    CACHE_PATH = os.path.join(WINDOW_PATH, 'cache')
+    CHECKPOINT_PATH = os.path.join(WINDOW_PATH, 'checkpoints')
+    LOG_PATH = os.path.join(WINDOW_PATH, 'logs')
 
     for path in [DRIVE_PATH, CACHE_PATH, CHECKPOINT_PATH, LOG_PATH, SHARED_PATH]:
         os.makedirs(path, exist_ok=True)
+
     os.chdir(DRIVE_PATH)
+    print(f"📂 工作目錄: {os.getcwd()}")
+    print(f"📂 Checkpoint: {CHECKPOINT_PATH}")
+    print(f"📂 共享目錄: {SHARED_PATH}")
 
 # 設定常數
 FEE_RATIO = 1.425/1000

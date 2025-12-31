@@ -1,0 +1,51 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "天空龍 視窗 1",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/十二組合快快龍_優化版_高胃納量.py",
+            "args": ["--window", "1"],
+            "console": "integratedTerminal",
+            "env": {
+                "WINDOW_ID": "1",
+                "FINLAB_API_KEY": "R5XcZHGBZgEO5zz+6e1iYAe3wcFiimTUNaCMKsnZEiM42Wp49xW46MySUZT1W/Ee#vip_m",
+                "DISCORD_WEBHOOK": "https://discord.com/api/webhooks/1429310065877323796/U8lefLn9F1FhHaRXt8a024gHP5alrnM_mXF8QXfhLiddhpV5AqUpkPEaYNEDLbzuuNdk"
+            }
+        },
+        {
+            "name": "天空龍 視窗 2",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/十二組合快快龍_優化版_高胃納量.py",
+            "args": ["--window", "2"],
+            "console": "integratedTerminal",
+            "env": {
+                "WINDOW_ID": "2",
+                "FINLAB_API_KEY": "R5XcZHGBZgEO5zz+6e1iYAe3wcFiimTUNaCMKsnZEiM42Wp49xW46MySUZT1W/Ee#vip_m",
+                "DISCORD_WEBHOOK": "https://discord.com/api/webhooks/1429310065877323796/U8lefLn9F1FhHaRXt8a024gHP5alrnM_mXF8QXfhLiddhpV5AqUpkPEaYNEDLbzuuNdk"
+            }
+        },
+        {
+            "name": "天空龍 視窗 3",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/十二組合快快龍_優化版_高胃納量.py",
+            "args": ["--window", "3"],
+            "console": "integratedTerminal",
+            "env": {
+                "WINDOW_ID": "3",
+                "FINLAB_API_KEY": "R5XcZHGBZgEO5zz+6e1iYAe3wcFiimTUNaCMKsnZEiM42Wp49xW46MySUZT1W/Ee#vip_m",
+                "DISCORD_WEBHOOK": "https://discord.com/api/webhooks/1429310065877323796/U8lefLn9F1FhHaRXt8a024gHP5alrnM_mXF8QXfhLiddhpV5AqUpkPEaYNEDLbzuuNdk"
+            }
+        }
+    ],
+    "compounds": [
+        {
+            "name": "天空龍 三視窗同時啟動",
+            "configurations": ["天空龍 視窗 1", "天空龍 視窗 2", "天空龍 視窗 3"],
+            "stopAll": false
+        }
+    ]
+}
