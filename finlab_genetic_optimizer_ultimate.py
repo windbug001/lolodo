@@ -88,7 +88,7 @@ DISCORD_WEBHOOK_URL = "https://discord.com/api/webhooks/1429310065877323796/U8le
 TARGET_SHARPE = 4.0
 MIN_CAPACITY = 5_000_000  # 500萬
 TARGET_ANNUAL_RETURN = 0.3
-MAX_DRAWDOWN = 0.15  # 最大回檔 15% (收緊以提升夏普)
+MAX_DRAWDOWN = 0.20  # 最大回檔 20%
 
 # 🔥 持股配比約束
 MIN_POSITION_WEIGHT = 0.03  # 最小持股 3%
@@ -1698,7 +1698,7 @@ def evaluate_fitness(individual: List[float]) -> Tuple[float, float, float, floa
         annual_return = overall['annual_return']
         max_drawdown = overall.get('max_drawdown', 0)
 
-        # 🔥 回檔硬限制：超過 15% 直接給極低分（加重懲罰以提升夏普）
+        # 🔥 回檔硬限制：超過 20% 直接給極低分（加重懲罰以提升夏普）
         if max_drawdown > MAX_DRAWDOWN:
             drawdown_penalty = -10.0 * (max_drawdown - MAX_DRAWDOWN) / MAX_DRAWDOWN
         else:
