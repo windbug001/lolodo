@@ -441,7 +441,11 @@ position_weight_mgr = PositionWeightManager()
 # ============================================================================
 # 🔔 Discord 通知系統
 # ============================================================================
-DISCORD_WEBHOOK_URL = "https://discord.com/api/webhooks/1429310065877323796/U8lefLn9F1FhHaRXt8a024gHP5alrnM_mXF8QXfhLiddhpV5AqUpkPEaYNEDLbzuuNdk"
+# 優先使用環境變數，否則使用預設值
+DISCORD_WEBHOOK_URL = os.environ.get(
+    'DISCORD_WEBHOOK_URL',
+    "https://discord.com/api/webhooks/1429310065877323796/U8lefLn9F1FhHaRXt8a024gHP5alrnM_mXF8QXfhLiddhpV5AqUpkPEaYNEDLbzuuNdk"
+)
 
 class DiscordNotifier:
     """Discord 通知管理器"""
@@ -704,12 +708,46 @@ def detect_google_drive_path():
 
     return None
 
-# Colab 環境設定
-if 'google.colab' in sys.modules:
-    from google.colab import drive
-    drive.mount('/content/drive')
-    IN_COLAB = True
 
+# ============================================================================
+# Colab 環境檢測（改良版）
+# ============================================================================
+def is_colab_environment():
+    """檢測是否在 Colab 環境中運行"""
+    # 方法1：檢查 sys.modules
+    if 'google.colab' in sys.modules:
+        return True
+    # 方法2：檢查 Colab 特有路徑
+    if os.path.exists('/content/drive/MyDrive'):
+        return True
+    # 方法3：檢查環境變數
+    if os.environ.get('COLAB_GPU') is not None:
+        return True
+    # 方法4：嘗試導入 google.colab
+    try:
+        import google.colab
+        return True
+    except ImportError:
+        pass
+    # 方法5：檢查 /content 目錄（Colab 特有）
+    if os.path.exists('/content') and os.path.isdir('/content'):
+        return True
+    return False
+
+
+IN_COLAB = is_colab_environment()
+
+# Colab 環境設定
+if IN_COLAB:
+    # 只有在 notebook 直接執行時才掛載（subprocess 已經有掛載好的 Drive）
+    if 'google.colab' in sys.modules:
+        try:
+            from google.colab import drive
+            drive.mount('/content/drive')
+        except:
+            pass  # 已經掛載了
+
+    print(f"✅ 檢測到 Colab 環境")
     BASE_PATH = '/content/drive/MyDrive/投資策略優化_十二策略_高胃納量版'
     WINDOW_PATH = f'{BASE_PATH}/window_{WINDOW_ID}'
     DRIVE_PATH = f'{WINDOW_PATH}/working'
@@ -2218,8 +2256,9 @@ def load_historical_best():
 
     best_individuals = []
 
-    if 'google.colab' not in sys.modules or DRIVE_PATH is None:
-        print("⚠️ 非 Colab 環境，跳過歷史最佳搜尋")
+    # 使用 IN_COLAB 變數判斷（支援 subprocess）
+    if not IN_COLAB or DRIVE_PATH is None:
+        print("⚠️ 非 Colab 環境或無 Drive 路徑，跳過歷史最佳搜尋")
         return best_individuals
 
     def extract_from_halloffame(cp_temp):
