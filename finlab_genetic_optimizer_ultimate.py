@@ -84,20 +84,26 @@ FINLAB_API_KEY = os.environ.get('FINLAB_API_KEY', "R5XcZHGBZgEO5zz+6e1iYAe3wcFii
 # Discord 通知設定
 DISCORD_WEBHOOK_URL = "https://discord.com/api/webhooks/1429310065877323796/U8lefLn9F1FhHaRXt8a024gHP5alrnM_mXF8QXfhLiddhpV5AqUpkPEaYNEDLbzuuNdk"
 
-# 優化目標
-TARGET_SHARPE = 4.0
-MIN_CAPACITY = 5_000_000  # 500萬
-TARGET_ANNUAL_RETURN = 0.3
-MAX_DRAWDOWN = 0.20  # 最大回檔 20%
+# 🎯 2026 統一優化目標
+TARGET_SHARPE = 4.2          # 🔥 目標夏普值 4.2
+MIN_CAPACITY = 10_000_000    # 🔥 胃納量 1000萬
+TARGET_ANNUAL_RETURN = 0.4   # 年化報酬 40%
+MAX_DRAWDOWN = 0.15          # 🔥 最大回檔 15%
 
 # 🔥 持股配比約束
-MIN_POSITION_WEIGHT = 0.03  # 最小持股 3%
+MIN_POSITION_WEIGHT = 0.03   # 最小持股 3%
 POSITION_WEIGHT_STEP = 0.03  # 持股必須是 3% 倍數
 
+# 🔄 自適應持股設定
+ADAPTIVE_POSITION = True     # 啟用自適應持股
+BULL_MARKET_STOCKS = 8       # 多頭市場持股數
+BEAR_MARKET_STOCKS = 4       # 空頭市場持股數
+MARKET_THRESHOLD = 0.5       # 市場判斷閾值（>50% 股票在均線上=多頭）
+
 # GA 演化參數
-POPULATION_SIZE = 50  # 較小的族群，因為 FinLab 回測較慢
-N_GENERATIONS = 200   # 🔥 增加至 200 代
-MUTATION_RATE = 0.2
+POPULATION_SIZE = 100        # 🔥 增加族群到 100
+N_GENERATIONS = 300          # 🔥 增加至 300 代
+MUTATION_RATE = 0.15         # 降低突變率以穩定
 CROSSOVER_RATE = 0.8
 
 # 🔥 3視窗交互設定
@@ -859,6 +865,43 @@ class VolatilityFilter:
             return position_df
 
 volatility_filter = VolatilityFilter()
+
+
+# =============================================================================
+# 🔄 自適應持股機制 - 根據市場狀況動態調整持股數量
+# =============================================================================
+def get_market_sentiment(close_df, ma_period=60):
+    """
+    計算市場情緒指標
+    返回：每日市場情緒分數 (0~1)，越高代表越多股票在均線之上
+    """
+    ma = close_df.rolling(ma_period).mean()
+    above_ma = (close_df > ma).astype(float)
+    sentiment = above_ma.mean(axis=1)
+    return sentiment
+
+
+def get_adaptive_top_n(close_df, base_top_n, sentiment=None):
+    """
+    根據市場情緒動態調整持股數量
+    - 多頭市場（>50% 股票在均線上）：增加持股
+    - 空頭市場（<50% 股票在均線上）：減少持股
+    """
+    if not ADAPTIVE_POSITION:
+        return base_top_n
+
+    if sentiment is None:
+        sentiment = get_market_sentiment(close_df)
+
+    # 根據情緒調整持股數量
+    bull_ratio = BULL_MARKET_STOCKS / base_top_n if base_top_n > 0 else 1
+    bear_ratio = BEAR_MARKET_STOCKS / base_top_n if base_top_n > 0 else 0.5
+
+    # 線性插值：空頭(0) -> 多頭(1)
+    adaptive_ratio = bear_ratio + (bull_ratio - bear_ratio) * sentiment.clip(0, 1)
+    adaptive_top_n = (base_top_n * adaptive_ratio).round().astype(int).clip(lower=2)
+
+    return adaptive_top_n
 
 
 # =============================================================================
