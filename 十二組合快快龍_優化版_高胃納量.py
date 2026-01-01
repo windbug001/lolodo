@@ -2743,7 +2743,7 @@ def create_smart_individual(toolbox):
     return creator.Individual(gene)
 
 
-def initialize_population_with_best(toolbox, pop_size=100):
+def initialize_population_with_best(toolbox, pop_size=POPULATION_SIZE):
     """初始化族群，包含歷史最佳個體"""
     historical_best = load_historical_best()
 
@@ -3001,7 +3001,7 @@ def run_genetic_algorithm():
     else:
         print(f"🔄 初始化新族群（高胃納量優化版）")
 
-        population = initialize_population_with_best(toolbox, pop_size=100)
+        population = initialize_population_with_best(toolbox, pop_size=POPULATION_SIZE)
 
         start_gen = 0
         halloffame = tools.HallOfFame(10)
