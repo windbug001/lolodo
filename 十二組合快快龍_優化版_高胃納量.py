@@ -1020,8 +1020,30 @@ close_high_low_open = (close_high_low == close_high_open).replace(False, np.nan)
 limit_up_all_day = (close_high_low_open == limit_up)
 limit_up_all_day = limit_up_all_day.fillna(False)
 
-rsi = data.indicator("RSI", adjust_price=False, resample="D", timeperiod=5)
-atr = data.indicator('ATR', adjust_price=True, timeperiod=10)
+# 🔥 使用 pandas_ta 計算技術指標（避免 talib 依賴問題）
+try:
+    import pandas_ta as ta
+    # RSI 計算
+    rsi = close.apply(lambda x: ta.rsi(x, length=5))
+    # ATR 計算
+    atr = adj_close.apply(lambda x: ta.atr(high.loc[x.name] if hasattr(x, 'name') else high[x.index],
+                                           low.loc[x.name] if hasattr(x, 'name') else low[x.index],
+                                           x, length=10) if len(x) > 10 else pd.Series(index=x.index))
+    # 簡化 ATR 計算（使用收盤價波動率替代）
+    atr = adj_close.rolling(10).std()
+    print("✅ 使用 pandas_ta 計算 RSI")
+except Exception as e:
+    print(f"⚠️ pandas_ta 計算失敗，使用簡化計算: {e}")
+    # 簡化 RSI 計算
+    delta = close.diff()
+    gain = delta.where(delta > 0, 0).rolling(window=5).mean()
+    loss = (-delta.where(delta < 0, 0)).rolling(window=5).mean()
+    rs = gain / (loss + 1e-10)
+    rsi = 100 - (100 / (1 + rs))
+    # 簡化 ATR 計算
+    atr = adj_close.rolling(10).std()
+    print("✅ 使用簡化公式計算 RSI/ATR")
+
 entry_volatility = atr/adj_close
 
 print(f"✅ 視窗 {WINDOW_ID} 資料載入與指標計算完成")
