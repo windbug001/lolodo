@@ -596,11 +596,15 @@ class IndependentDataManager:
             # inventory 資料較大，記憶體不足或載入失敗時跳過
             try:
                 data_dict['inventory'] = data.get("inventory")
+            except (EOFError, MemoryError, pickle.UnpicklingError) as e:
+                # 🔥 直接捕捉這些錯誤類型
+                print(f"⚠️ 視窗 {self.window_id}: inventory 資料載入失敗，跳過（{type(e).__name__}）")
+                data_dict['inventory'] = None
             except Exception as e:
                 error_msg = str(e).lower()
                 error_type = type(e).__name__.lower()
                 # 捕捉常見的資料載入錯誤：記憶體、EOF、pickle 損壞等
-                skip_keywords = ['memory', 'allocate', 'eof', 'input', 'pickle', 'corrupt']
+                skip_keywords = ['memory', 'allocate', 'eof', 'input', 'pickle', 'corrupt', 'ran out']
                 if any(kw in error_msg or kw in error_type for kw in skip_keywords):
                     print(f"⚠️ 視窗 {self.window_id}: inventory 資料載入失敗，跳過（{type(e).__name__}）")
                     data_dict['inventory'] = None
