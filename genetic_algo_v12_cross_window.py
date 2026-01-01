@@ -1260,11 +1260,32 @@ def run_detailed_oos_test(gene, gen):
         if test_report is None:
             return None
 
-        # 顯示詳細報告
-        test_report.display()
-
+        # 🔥 改用文字版詳細報告（VS Code 命令行無法渲染 HTML）
         test_metrics = test_report.get_metrics()
         test_sharpe = test_metrics['ratio'].get('sharpeRatio', 0) or 0
+
+        # 提取詳細數據
+        test_return = test_metrics['return'].get('strategyReturn', 0) or 0
+        test_annual_return = test_metrics['return'].get('annualizedReturn', 0) or 0
+        test_max_dd = test_metrics['risk'].get('maxDrawdown', 0) or 0
+        test_win_rate = test_metrics['trade'].get('winRate', 0) or 0
+        test_profit_factor = test_metrics['trade'].get('profitFactor', 0) or 0
+        test_total_trades = test_metrics['trade'].get('totalTrades', 0) or 0
+
+        # 打印文字版詳細報告
+        print(f"\n   {'─'*55}")
+        print(f"   📊 測試期績效詳細數據 ({TEST_START[:4]}~{TEST_END[:4]})")
+        print(f"   {'─'*55}")
+        print(f"   {'指標':<18} {'數值':>15}")
+        print(f"   {'─'*35}")
+        print(f"   {'夏普值':<16} {test_sharpe:>15.3f}")
+        print(f"   {'累積報酬':<16} {test_return*100:>14.1f}%")
+        print(f"   {'年化報酬':<16} {test_annual_return*100:>14.1f}%")
+        print(f"   {'最大回檔':<16} {test_max_dd*100:>14.1f}%")
+        print(f"   {'勝率':<16} {test_win_rate*100:>14.1f}%")
+        print(f"   {'盈虧比':<16} {test_profit_factor:>15.2f}")
+        print(f"   {'總交易次數':<16} {test_total_trades:>15.0f}")
+        print(f"   {'─'*55}")
 
         # 計算過擬合指標
         sharpe_ratio = test_sharpe / train_sharpe if train_sharpe > 0 else 0
