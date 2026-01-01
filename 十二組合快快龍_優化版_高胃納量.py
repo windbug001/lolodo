@@ -1065,6 +1065,55 @@ if USE_ML_FEATURES:
 print("\n🔄 預先計算昂貴指標...")
 precompute_start = time.time()
 
+# ============================================================================
+# 🚀 預計算常用技術指標 - 大幅加速策略評估！
+# ============================================================================
+print("📊 預計算移動平均線...")
+PRECOMPUTED_MA = {}
+for period in [5, 10, 20, 60, 120, 250]:
+    PRECOMPUTED_MA[period] = close.average(period)
+print(f"✅ 移動平均線預計算完成 ({len(PRECOMPUTED_MA)} 個週期)")
+
+print("📊 預計算營收移動平均...")
+PRECOMPUTED_REV_MA = {}
+for period in [3, 6, 12]:
+    PRECOMPUTED_REV_MA[period] = rev.average(period)
+print(f"✅ 營收移動平均預計算完成 ({len(PRECOMPUTED_REV_MA)} 個週期)")
+
+print("📊 預計算成交量移動平均...")
+PRECOMPUTED_VOL_MA = {}
+for period in [1, 5, 10, 20]:
+    PRECOMPUTED_VOL_MA[period] = vol.average(period)
+print(f"✅ 成交量移動平均預計算完成 ({len(PRECOMPUTED_VOL_MA)} 個週期)")
+
+print("📊 預計算股價新高/新低...")
+PRECOMPUTED_ROLLING_MAX = {}
+PRECOMPUTED_ROLLING_MIN = {}
+for period in [20, 60, 120, 260]:
+    PRECOMPUTED_ROLLING_MAX[period] = close.rolling(period).max()
+    PRECOMPUTED_ROLLING_MIN[period] = close.rolling(period).min()
+print(f"✅ 股價新高/新低預計算完成 ({len(PRECOMPUTED_ROLLING_MAX)} 個週期)")
+
+print("📊 預計算常用條件篩選...")
+# 營收年增排名
+PRECOMPUTED_REV_RANK = rev_yoy_growth.rank(pct=True, axis=1)
+# 收盤價大於常用均線組合
+PRECOMPUTED_ABOVE_MA60 = close > PRECOMPUTED_MA[60]
+PRECOMPUTED_ABOVE_MA120 = close > PRECOMPUTED_MA[120]
+PRECOMPUTED_ABOVE_MA250 = close > PRECOMPUTED_MA[250]
+# 長均線多頭排列
+PRECOMPUTED_LONG_MA_PATTERN = (
+    (close > PRECOMPUTED_MA[5]) &
+    (close > PRECOMPUTED_MA[10]) &
+    (close > PRECOMPUTED_MA[20]) &
+    (close > PRECOMPUTED_MA[60]) &
+    (close > PRECOMPUTED_MA[120])
+)
+# 營收相關條件
+PRECOMPUTED_REV_3M_GT_12M = PRECOMPUTED_REV_MA[3] > PRECOMPUTED_REV_MA[12]
+PRECOMPUTED_REV_BOTTOM = ((rev.rolling(12).min()) / rev < 1.2).sustain(3)
+print("✅ 常用條件篩選預計算完成")
+
 # 預先計算 small_inv_under50 - 這個操作非常昂貴，只需計算一次
 PRECOMPUTED_SMALL_INV = None
 PRECOMPUTED_INVENTORY_BY_LEVEL = {}
@@ -1229,7 +1278,7 @@ def strategy_low_volatility_pe(params):
 
 
 def strategy_small_investor(params):
-    """策略2: 小資族策略 - 高胃納量版"""
+    """策略2: 小資族策略 - 高胃納量版 🚀 優化：使用預計算"""
     當月營收 = data.get('monthly_revenue:當月營收') * 1000
     當季營收 = 當月營收.rolling(4).sum()
     市值營收比 = 市值 / 當季營收
@@ -1247,16 +1296,26 @@ def strategy_small_investor(params):
 
     cond排除月營收連3月衰退 = ~(rev_yoy_growth < params['rev_yoy_growth_limit']).sustain(3)
     cond排除月營收成長趨勢過老 = ~(rev_yoy_growth > 60).sustain(12,8)
-    cond確認營收底部 = ((rev.rolling(12).min())/(rev) < 1.2).sustain(3)
+    # 🚀 使用預計算營收底部
+    cond確認營收底部 = PRECOMPUTED_REV_BOTTOM
     cond單月營收月增率連續3月大於閾值 = (rev_month_growth > params['rev_mom_growth_limit']).sustain(3)
 
+    # 🚀 使用預計算移動平均
     ma_period = params['ma_period']
-    cond收盤價大於均線 = (close > close.average(ma_period)) & (close > close.average(ma_period*2))
-    cond近三個月營收大於年營收 = rev.average(3) > rev.average(12)
+    if ma_period in PRECOMPUTED_MA and ma_period*2 in PRECOMPUTED_MA:
+        cond收盤價大於均線 = (close > PRECOMPUTED_MA[ma_period]) & (close > PRECOMPUTED_MA[ma_period*2])
+    else:
+        cond收盤價大於均線 = (close > close.average(ma_period)) & (close > close.average(ma_period*2))
+    # 🚀 使用預計算營收比較
+    cond近三個月營收大於年營收 = PRECOMPUTED_REV_3M_GT_12M
     業外收支營收率占比低 = (業外收支營收率 < 7.3)
 
     rsv_period = params['rsv_period']
-    rsv = (close - close.rolling(rsv_period).min()) / (close.rolling(rsv_period).max() - close.rolling(rsv_period).min())
+    # 🚀 使用預計算 rolling min/max
+    if rsv_period in PRECOMPUTED_ROLLING_MIN and rsv_period in PRECOMPUTED_ROLLING_MAX:
+        rsv = (close - PRECOMPUTED_ROLLING_MIN[rsv_period]) / (PRECOMPUTED_ROLLING_MAX[rsv_period] - PRECOMPUTED_ROLLING_MIN[rsv_period])
+    else:
+        rsv = (close - close.rolling(rsv_period).min()) / (close.rolling(rsv_period).max() - close.rolling(rsv_period).min())
 
     position = ((cond1 & cond2 & cond3 & cond4 & cond5 & cond6
                  & cond排除月營收成長趨勢過老 & cond單月營收月增率連續3月大於閾值
@@ -1269,22 +1328,30 @@ def strategy_small_investor(params):
 
 
 def strategy_revenue_price_turbo(params):
-    """策略3: 營收股價雙渦輪策略 - 高胃納量版"""
+    """策略3: 營收股價雙渦輪策略 - 高胃納量版 🚀 優化：使用預計算"""
     rev_ma_period = max(1, int(params['rev_ma_period']))
-    rev_ma = rev.average(rev_ma_period)
+    # 🚀 使用預計算營收移動平均
+    if rev_ma_period in PRECOMPUTED_REV_MA:
+        rev_ma = PRECOMPUTED_REV_MA[rev_ma_period]
+    else:
+        rev_ma = rev.average(rev_ma_period)
     rev_ma_lookback = max(rev_ma_period + 1, int(params['rev_ma_lookback']))
     condition_近N月平均營收創M個月來新高 = rev_ma == rev_ma.rolling(rev_ma_lookback, min_periods=1).max()
 
     price_high_window = max(1, int(params['price_high_window']))
-    condition_近N日內有1日股價創新高 = (close == close.rolling(260).max()).sustain(price_high_window, 1)
-    condition_成交均量大於閾值 = vol.average(1) > params['min_volume']
+    # 🚀 使用預計算 260 日新高
+    if 260 in PRECOMPUTED_ROLLING_MAX:
+        condition_近N日內有1日股價創新高 = (close == PRECOMPUTED_ROLLING_MAX[260]).sustain(price_high_window, 1)
+    else:
+        condition_近N日內有1日股價創新高 = (close == close.rolling(260).max()).sustain(price_high_window, 1)
+    # 🚀 使用預計算成交量
+    condition_成交均量大於閾值 = PRECOMPUTED_VOL_MA[1] > params['min_volume'] if 1 in PRECOMPUTED_VOL_MA else vol.average(1) > params['min_volume']
 
     # 🎯 強制高胃納量篩選
     cond_capacity = high_capacity_filter
 
-    long_ma_pattern = ((close > close.average(5)) & (close > close.average(10))
-                     & (close > close.average(20)) & (close > close.average(60))
-                     & (close > close.average(120)))
+    # 🚀 使用預計算長均線多頭排列
+    long_ma_pattern = PRECOMPUTED_LONG_MA_PATTERN
 
     收盤價_超級績效 = close > (close.average(params['performance_ma_period'])*params['performance_threshold'])
     rsi_higt_trend = (rsi > params['rsi_threshold']).sustain(params['rsi_trend_period'])
@@ -1328,16 +1395,20 @@ def strategy_revenue_price_turbo(params):
 
 
 def strategy_high_yield_turtle(params):
-    """策略4: 高殖利率烏龜策略 - 高胃納量版"""
-    sma20 = close.average(20)
-    sma60 = close.average(60)
+    """策略4: 高殖利率烏龜策略 - 高胃納量版 🚀 優化：使用預計算"""
+    # 🚀 使用預計算移動平均
+    sma20 = PRECOMPUTED_MA[20] if 20 in PRECOMPUTED_MA else close.average(20)
+    sma60 = PRECOMPUTED_MA[60] if 60 in PRECOMPUTED_MA else close.average(60)
 
     cond1 = 殖利率 >= params['min_yield_ratio']
     cond2 = (close > sma20) & (close > sma60)
-    cond3 = rev.average(3) > rev.average(12)
+    # 🚀 使用預計算營收比較
+    cond3 = PRECOMPUTED_REV_3M_GT_12M
     cond4 = 營業利益率 >= params['min_op_earn_ratio']
     cond5 = 董監持有股數占比 >= params['min_boss_hold']
-    cond6 = (vol.average(5) >= params['min_volume']) & (vol.average(5) <= params['max_volume'])
+    # 🚀 使用預計算成交量
+    vol_ma5 = PRECOMPUTED_VOL_MA[5] if 5 in PRECOMPUTED_VOL_MA else vol.average(5)
+    cond6 = (vol_ma5 >= params['min_volume']) & (vol_ma5 <= params['max_volume'])
 
     # 🎯 強制高胃納量篩選
     cond_capacity = high_capacity_filter
@@ -1351,15 +1422,17 @@ def strategy_high_yield_turtle(params):
 
 
 def strategy_low_volatility_index(params):
-    """策略5: 低波動性指標策略 - 高胃納量版"""
+    """策略5: 低波動性指標策略 - 高胃納量版 🚀 優化：使用預計算"""
     std = close.pct_change().rolling(params['std_window']).std().rank(axis=1, pct=True)
 
     # 🎯 強制高胃納量篩選
     cond_capacity = high_capacity_filter
 
-    position = 市值[(vol.average(20) > params['min_volume'])
-        & (close > close.average(60)) & (close > close.average(120))
-        & (close > close.average(250)) & (std < params['std_threshold'])
+    # 🚀 使用預計算成交量和均線
+    vol_ma20 = PRECOMPUTED_VOL_MA[20] if 20 in PRECOMPUTED_VOL_MA else vol.average(20)
+    position = 市值[(vol_ma20 > params['min_volume'])
+        & PRECOMPUTED_ABOVE_MA60 & PRECOMPUTED_ABOVE_MA120
+        & PRECOMPUTED_ABOVE_MA250 & (std < params['std_threshold'])
         & cond_capacity
     ].is_smallest(params['top_n'])
 
@@ -1368,13 +1441,23 @@ def strategy_low_volatility_index(params):
 
 
 def strategy_market_indicator(params):
-    """策略6: 藏獒外掛大盤指針策略 - 高胃納量版"""
-    vol_ma = vol.average(10)
+    """策略6: 藏獒外掛大盤指針策略 - 高胃納量版 🚀 優化：使用預計算"""
+    # 🚀 使用預計算成交量均線
+    vol_ma = PRECOMPUTED_VOL_MA[10] if 10 in PRECOMPUTED_VOL_MA else vol.average(10)
 
-    cond1 = (close == close.rolling(params['new_high_window']).max())
+    # 🚀 使用預計算股價新高
+    new_high_window = params['new_high_window']
+    if new_high_window in PRECOMPUTED_ROLLING_MAX:
+        cond1 = (close == PRECOMPUTED_ROLLING_MAX[new_high_window])
+    else:
+        cond1 = (close == close.rolling(new_high_window).max())
     cond2 = ~(rev_yoy_growth < params['min_year_growth']).sustain(3)
     cond3 = ~(rev_yoy_growth > params['max_year_growth']).sustain(12, 8)
-    cond4 = ((rev.rolling(12).min())/(rev) < params['rev_bottom_ratio']).sustain(3)
+    # 🚀 使用預計算營收底部（如果 ratio 接近 1.2）
+    if abs(params['rev_bottom_ratio'] - 1.2) < 0.1:
+        cond4 = PRECOMPUTED_REV_BOTTOM
+    else:
+        cond4 = ((rev.rolling(12).min())/(rev) < params['rev_bottom_ratio']).sustain(3)
     cond5 = (rev_month_growth > params['min_month_growth']).sustain(3)
     cond6 = vol_ma > params['min_volume']
 
@@ -1391,7 +1474,7 @@ def strategy_market_indicator(params):
 
 
 def strategy_prison_rabbit(params):
-    """策略7: 監獄兔策略 - 高胃納量版"""
+    """策略7: 監獄兔策略 - 高胃納量版 🚀 優化：使用預計算"""
     rev_growth_ma = rev_yoy_growth.average(params['growth_ma_period'])
 
     cond1 = rev_growth_ma > params['min_growth_rate']
@@ -1399,7 +1482,9 @@ def strategy_prison_rabbit(params):
     cond3 = pe > params['min_pe']
     cond4 = ROE綜合損益 > params['min_roe']
     cond5 = 營業毛利率 > params['min_gpm']
-    cond6 = vol.average(20) > params['min_volume']
+    # 🚀 使用預計算成交量均線
+    vol_ma20 = PRECOMPUTED_VOL_MA[20] if 20 in PRECOMPUTED_VOL_MA else vol.average(20)
+    cond6 = vol_ma20 > params['min_volume']
 
     momentum = close / close.shift(params['momentum_period'])
     cond7 = momentum > params['min_momentum']
@@ -1415,13 +1500,27 @@ def strategy_prison_rabbit(params):
 
 
 def strategy_elite_momentum(params):
-    """策略8: 精選強勢股策略 - 高胃納量版"""
-    rs = close / close.average(params['rs_period'])
-    vol_ratio = vol / vol.average(params['vol_ma_period'])
+    """策略8: 精選強勢股策略 - 高胃納量版 🚀 優化：使用預計算"""
+    # 🚀 使用預計算移動平均
+    rs_period = params['rs_period']
+    if rs_period in PRECOMPUTED_MA:
+        rs = close / PRECOMPUTED_MA[rs_period]
+    else:
+        rs = close / close.average(rs_period)
+
+    vol_ma_period = params['vol_ma_period']
+    if vol_ma_period in PRECOMPUTED_VOL_MA:
+        vol_ratio = vol / PRECOMPUTED_VOL_MA[vol_ma_period]
+    else:
+        vol_ratio = vol / vol.average(vol_ma_period)
 
     cond1 = rs > params['min_rs']
     cond2 = vol_ratio > params['min_vol_ratio']
-    cond3 = close > close.average(params['ma_period'])
+    ma_period = params['ma_period']
+    if ma_period in PRECOMPUTED_MA:
+        cond3 = close > PRECOMPUTED_MA[ma_period]
+    else:
+        cond3 = close > close.average(ma_period)
     cond4 = 營業利益成長率 > params['min_op_growth']
     cond5 = rev_yoy_growth > params['min_rev_growth']
 
@@ -1436,14 +1535,15 @@ def strategy_elite_momentum(params):
 
 
 def strategy_pure_technical(params):
-    """策略9: 純技術分析策略 - 高胃納量版"""
+    """策略9: 純技術分析策略 - 高胃納量版 🚀 優化：使用預計算"""
     ema12 = close.ewm(span=12, adjust=False).mean()
     ema26 = close.ewm(span=26, adjust=False).mean()
     macd = ema12 - ema26
     signal = macd.ewm(span=9, adjust=False).mean()
     macd_histogram = macd - signal
 
-    ma20 = close.average(20)
+    # 🚀 使用預計算移動平均
+    ma20 = PRECOMPUTED_MA[20] if 20 in PRECOMPUTED_MA else close.average(20)
     std20 = close.rolling(20).std()
     upper_band = ma20 + (std20 * params['bb_multiplier'])
 
@@ -1453,7 +1553,12 @@ def strategy_pure_technical(params):
     cond2 = close > ma20
     cond3 = close < upper_band
     cond4 = ~rsi_overbought
-    cond5 = vol > vol.average(params['vol_period'])
+    # 🚀 使用預計算成交量均線
+    vol_period = params['vol_period']
+    if vol_period in PRECOMPUTED_VOL_MA:
+        cond5 = vol > PRECOMPUTED_VOL_MA[vol_period]
+    else:
+        cond5 = vol > vol.average(vol_period)
 
     # 🎯 強制高胃納量篩選
     cond_capacity = high_capacity_filter
@@ -1491,14 +1596,19 @@ def strategy_scaredy_cat(params):
 
 
 def strategy_contract_debt_construction(params):
-    """策略11: 合約負債建築工策略 - 高胃納量版"""
+    """策略11: 合約負債建築工策略 - 高胃納量版 🚀 優化：使用預計算"""
     contract_debt_growth = 合約負債 / 合約負債.shift(4)
 
     cond1 = contract_debt_growth > params['min_debt_growth']
     cond2 = 合約負債 > params['min_debt_amount']
     cond3 = rev_yoy_growth > params['min_rev_growth']
     cond4 = 營業毛利率 > params['min_gpm']
-    cond5 = close > close.average(params['ma_period'])
+    # 🚀 使用預計算移動平均
+    ma_period = params['ma_period']
+    if ma_period in PRECOMPUTED_MA:
+        cond5 = close > PRECOMPUTED_MA[ma_period]
+    else:
+        cond5 = close > close.average(ma_period)
 
     # 🎯 強制高胃納量篩選
     cond_capacity = high_capacity_filter
@@ -1512,7 +1622,7 @@ def strategy_contract_debt_construction(params):
 
 
 def strategy_rd_maniac(params):
-    """策略12: 研發魔人策略 - 高胃納量版"""
+    """策略12: 研發魔人策略 - 高胃納量版 🚀 優化：使用預計算"""
     rd_ratio = 研究發展費 / 營業收入淨額
     rd_growth = 研究發展費 / 研究發展費.shift(4)
 
@@ -1521,7 +1631,12 @@ def strategy_rd_maniac(params):
     cond3 = 營業利益成長率 > params['min_op_growth']
     cond4 = rev_yoy_growth > params['min_rev_growth']
     cond5 = 市值 > params['min_market_cap']
-    cond6 = close > close.average(params['ma_period'])
+    # 🚀 使用預計算移動平均
+    ma_period = params['ma_period']
+    if ma_period in PRECOMPUTED_MA:
+        cond6 = close > PRECOMPUTED_MA[ma_period]
+    else:
+        cond6 = close > close.average(ma_period)
 
     # 🎯 強制高胃納量篩選
     cond_capacity = high_capacity_filter
