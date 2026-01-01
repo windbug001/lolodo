@@ -125,7 +125,7 @@ BEAR_MARKET_STOCKS = 6       # 空頭市場持股數
 MARKET_THRESHOLD = 0.5       # 市場判斷閾值（>50% 股票在均線上=多頭）
 
 # GA 演化參數
-POPULATION_SIZE = 100        # 🔥 增加族群到 100
+POPULATION_SIZE = 30         # 🔥 本地執行用 30（加速初始評估）
 N_GENERATIONS = 300          # 🔥 增加至 300 代
 MUTATION_RATE = 0.15         # 降低突變率以穩定
 
