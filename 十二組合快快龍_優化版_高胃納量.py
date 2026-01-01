@@ -780,8 +780,11 @@ if IN_COLAB:
         '/content/drive/MyDrive/投資策略優化_十二策略_統一版'
     ]
 else:
-    # 🔥 本地執行模式（VS Code / 命令列）
+    # ==========================================================================
+    # 🔥 本地執行模式（VS Code / 命令列）- 完全支援
+    # ==========================================================================
     IN_COLAB = False
+    print("🖥️  VS Code / 本地執行模式")
 
     # 優先使用環境變數指定的路徑
     GOOGLE_DRIVE_PATH = os.environ.get('GOOGLE_DRIVE_PATH', None)
@@ -800,12 +803,19 @@ else:
             os.path.join(GOOGLE_DRIVE_PATH, '投資策略優化_十二策略_統一版')
         ]
     else:
-        # 本地模式（無 Google Drive）
-        print("⚠️ 未偵測到 Google Drive，使用本地目錄")
-        print("   提示：設定環境變數 GOOGLE_DRIVE_PATH 指定 Google Drive 路徑")
-        BASE_PATH = '.'
-        SHARED_PATH = './shared_best'
-        ADDITIONAL_SEARCH_PATHS = []
+        # 🔥 本地模式（無 Google Drive）- 完全支援！
+        print("📁 使用本地目錄模式")
+        print("   提示：設定環境變數 GOOGLE_DRIVE_PATH 可同步 Google Drive")
+
+        # 使用當前目錄作為基礎路徑
+        SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+        BASE_PATH = os.path.join(SCRIPT_DIR, '投資策略優化_十二策略_高胃納量版')
+        SHARED_PATH = os.path.join(BASE_PATH, 'shared_best')
+        ADDITIONAL_SEARCH_PATHS = [
+            os.path.join(SCRIPT_DIR, '投資策略優化_十二策略_獨立版'),
+            os.path.join(SCRIPT_DIR, '投資策略優化_十二策略_統一版'),
+            SCRIPT_DIR  # 🔥 也搜尋腳本所在目錄
+        ]
 
     WINDOW_PATH = os.path.join(BASE_PATH, f'window_{WINDOW_ID}')
     DRIVE_PATH = os.path.join(WINDOW_PATH, 'working')
@@ -816,10 +826,13 @@ else:
     for path in [DRIVE_PATH, CACHE_PATH, CHECKPOINT_PATH, LOG_PATH, SHARED_PATH]:
         os.makedirs(path, exist_ok=True)
 
+    # 🔥 切換到工作目錄
     os.chdir(DRIVE_PATH)
+    print(f"📂 基礎路徑: {BASE_PATH}")
     print(f"📂 工作目錄: {os.getcwd()}")
     print(f"📂 Checkpoint: {CHECKPOINT_PATH}")
     print(f"📂 共享目錄: {SHARED_PATH}")
+    print(f"📂 搜尋路徑: {len(ADDITIONAL_SEARCH_PATHS)} 個")
 
 # 設定常數
 FEE_RATIO = 1.425/1000
@@ -2382,10 +2395,12 @@ def load_historical_best():
 
     best_individuals = []
 
-    # 使用 IN_COLAB 變數判斷（支援 subprocess）
-    if not IN_COLAB or DRIVE_PATH is None:
-        print("⚠️ 非 Colab 環境或無 Drive 路徑，跳過歷史最佳搜尋")
+    # 🔥 移除 Colab 限制，支援本地執行
+    if DRIVE_PATH is None:
+        print("⚠️ 無 Drive 路徑，跳過歷史最佳搜尋")
         return best_individuals
+
+    print(f"📂 當前環境: {'Colab' if IN_COLAB else 'VS Code 本地'}")
 
     def extract_from_halloffame(cp_temp):
         if "halloffame" not in cp_temp or not cp_temp["halloffame"]:
