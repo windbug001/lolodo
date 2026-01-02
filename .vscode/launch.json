@@ -1,0 +1,52 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "🐉 十二組合天空龍 - 調試模式",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/sky_dragon_continuous_runner.py",
+            "args": ["--mode", "continuous", "--debug"],
+            "console": "integratedTerminal",
+            "justMyCode": true,
+            "env": {
+                "PYTHONUNBUFFERED": "1",
+                "FINLAB_DISABLE_CACHE": "1"
+            }
+        },
+        {
+            "name": "🐉 單次執行 - 調試模式",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/sky_dragon_continuous_runner.py",
+            "args": ["--mode", "single", "--debug"],
+            "console": "integratedTerminal",
+            "justMyCode": true,
+            "env": {
+                "PYTHONUNBUFFERED": "1",
+                "FINLAB_DISABLE_CACHE": "1"
+            }
+        },
+        {
+            "name": "📊 監控進度",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/sky_dragon_continuous_runner.py",
+            "args": ["--mode", "monitor"],
+            "console": "integratedTerminal",
+            "justMyCode": true
+        },
+        {
+            "name": "🧬 原版 v9 優化器",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/genetic_stock_optimizer_v9.py",
+            "console": "integratedTerminal",
+            "justMyCode": true,
+            "env": {
+                "PYTHONUNBUFFERED": "1",
+                "FINLAB_DISABLE_CACHE": "1"
+            }
+        }
+    ]
+}

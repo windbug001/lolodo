@@ -1,0 +1,25 @@
+{
+    "python.defaultInterpreterPath": "python3",
+    "python.terminal.activateEnvironment": true,
+    "terminal.integrated.env.linux": {
+        "PYTHONUNBUFFERED": "1",
+        "FINLAB_DISABLE_CACHE": "1"
+    },
+    "terminal.integrated.env.osx": {
+        "PYTHONUNBUFFERED": "1",
+        "FINLAB_DISABLE_CACHE": "1"
+    },
+    "terminal.integrated.env.windows": {
+        "PYTHONUNBUFFERED": "1",
+        "FINLAB_DISABLE_CACHE": "1"
+    },
+    "files.associations": {
+        "*.py": "python"
+    },
+    "editor.formatOnSave": true,
+    "python.formatting.provider": "none",
+    "[python]": {
+        "editor.defaultFormatter": "ms-python.black-formatter",
+        "editor.formatOnSave": false
+    }
+}

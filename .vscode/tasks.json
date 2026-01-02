@@ -1,0 +1,101 @@
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "🐉 十二組合天空龍 - 不間斷執行",
+            "type": "shell",
+            "command": "python",
+            "args": [
+                "${workspaceFolder}/sky_dragon_continuous_runner.py",
+                "--mode", "continuous"
+            ],
+            "options": {
+                "cwd": "${workspaceFolder}",
+                "env": {
+                    "PYTHONUNBUFFERED": "1",
+                    "FINLAB_DISABLE_CACHE": "1"
+                }
+            },
+            "problemMatcher": [],
+            "presentation": {
+                "reveal": "always",
+                "panel": "new",
+                "focus": true
+            },
+            "isBackground": true,
+            "group": {
+                "kind": "build",
+                "isDefault": true
+            }
+        },
+        {
+            "label": "🐉 十二組合天空龍 - 單次執行",
+            "type": "shell",
+            "command": "python",
+            "args": [
+                "${workspaceFolder}/sky_dragon_continuous_runner.py",
+                "--mode", "single"
+            ],
+            "options": {
+                "cwd": "${workspaceFolder}",
+                "env": {
+                    "PYTHONUNBUFFERED": "1",
+                    "FINLAB_DISABLE_CACHE": "1"
+                }
+            },
+            "problemMatcher": [],
+            "presentation": {
+                "reveal": "always",
+                "panel": "new"
+            }
+        },
+        {
+            "label": "📊 監控策略進度",
+            "type": "shell",
+            "command": "python",
+            "args": [
+                "${workspaceFolder}/sky_dragon_continuous_runner.py",
+                "--mode", "monitor"
+            ],
+            "options": {
+                "cwd": "${workspaceFolder}"
+            },
+            "problemMatcher": [],
+            "presentation": {
+                "reveal": "always",
+                "panel": "shared"
+            },
+            "isBackground": true
+        },
+        {
+            "label": "🛑 停止所有策略",
+            "type": "shell",
+            "command": "python",
+            "args": [
+                "${workspaceFolder}/sky_dragon_continuous_runner.py",
+                "--mode", "stop"
+            ],
+            "options": {
+                "cwd": "${workspaceFolder}"
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "📈 查看最佳結果",
+            "type": "shell",
+            "command": "python",
+            "args": [
+                "${workspaceFolder}/sky_dragon_continuous_runner.py",
+                "--mode", "results"
+            ],
+            "options": {
+                "cwd": "${workspaceFolder}"
+            },
+            "problemMatcher": [],
+            "presentation": {
+                "reveal": "always",
+                "panel": "shared"
+            }
+        }
+    ]
+}
