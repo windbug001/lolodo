@@ -62,8 +62,11 @@ pd.set_option('display.max_columns', None)
 pd.set_option('future.no_silent_downcasting', True)
 
 # === 🔥 核心設定（請修改）===
-WINDOW_ID = 1  # 🔥 視窗 ID (1-4)，多視窗執行時請修改此值
-FINLAB_API_KEY = "R5XcZHGBZgEO5zz+6e1iYAe3wcFiimTUNaCMKsnZEiM42Wp49xW46MySUZT1W/Ee#vip_m"
+WINDOW_ID = int(os.environ.get('WINDOW_ID', 1))  # 🔥 視窗 ID (1-4)，多視窗執行時請修改此值
+FINLAB_API_KEY = os.environ.get('FINLAB_API_KEY', "R5XcZHGBZgEO5zz+6e1iYAe3wcFiimTUNaCMKsnZEiM42Wp49xW46MySUZT1W/Ee#vip_m")
+
+# 🔥 新增：從指定 checkpoint 開始演化（而非歷史最佳）
+CHECKPOINT_PATH = os.environ.get('CHECKPOINT_PATH', None)  # 例如: '/content/drive/MyDrive/.../checkpoint_window_1_latest.pkl'
 
 # 優化目標
 TARGET_SHARPE = 4.0
@@ -89,6 +92,8 @@ BACKTEST_END = None
 print(f"=" * 80)
 print(f"🚀 FinLab 台股基因演算法優化系統 v1.0 - 視窗 {WINDOW_ID}")
 print(f"   🎯 目標：夏普 >= {TARGET_SHARPE}, 胃納量 >= {MIN_CAPACITY/1e7:.0f}00萬")
+if CHECKPOINT_PATH:
+    print(f"   📂 從 checkpoint 開始: {CHECKPOINT_PATH}")
 print(f"=" * 80)
 
 # =============================================================================
@@ -1173,6 +1178,63 @@ class EvolutionEngine:
         self.history = []
         self.logger = ProgressLogger(WINDOW_ID)  # 🔥 初始化進度日誌記錄器
 
+    def _load_checkpoint(self, checkpoint_path: str) -> Optional[List]:
+        """
+        🔥 從指定 checkpoint 載入種群
+
+        載入後不設定適應度，強制使用新的適應度函數重新評估
+        """
+        if not checkpoint_path or not os.path.exists(checkpoint_path):
+            print(f"⚠️ Checkpoint 檔案不存在: {checkpoint_path}")
+            return None
+
+        try:
+            with open(checkpoint_path, 'rb') as f:
+                data = pickle.load(f)
+
+            population = []
+
+            # 支援多種 checkpoint 格式
+            if isinstance(data, dict):
+                if 'population' in data:
+                    pop_data = data['population']
+                elif 'individuals' in data:
+                    pop_data = data['individuals']
+                else:
+                    pop_data = []
+            elif isinstance(data, list):
+                pop_data = data
+            else:
+                pop_data = []
+
+            for item in pop_data:
+                # 取得基因
+                if isinstance(item, dict) and 'genes' in item:
+                    genes = item['genes']
+                elif isinstance(item, (list, np.ndarray)):
+                    genes = list(item)
+                else:
+                    continue
+
+                # 創建個體（不設定適應度，強制重新評估）
+                ind = creator.Individual(genes)
+                population.append(ind)
+
+            if population:
+                print(f"✅ 從 checkpoint 載入 {len(population)} 個個體")
+                print(f"   來源: {checkpoint_path}")
+                print(f"   🔥 將使用新的適應度函數重新評估所有個體")
+                return population
+            else:
+                print(f"⚠️ Checkpoint 檔案中無有效個體")
+                return None
+
+        except Exception as e:
+            print(f"⚠️ 載入 checkpoint 失敗: {e}")
+            import traceback
+            traceback.print_exc()
+            return None
+
     def run(self, n_generations: int = N_GENERATIONS) -> Tuple[List, List]:
         """執行演化"""
         print(f"\n{'='*70}")
@@ -1180,11 +1242,29 @@ class EvolutionEngine:
         print(f"   族群: {POPULATION_SIZE}, 世代: {n_generations}")
         print(f"{'='*70}\n")
 
-        # 初始化族群
-        population = self.toolbox.population(n=POPULATION_SIZE)
+        # 🔥 優先從指定 checkpoint 載入（而非歷史最佳）
+        population = None
 
-        # 注入歷史精英
-        population = self.pareto_mgr.inject_elites(population, ratio=0.3)
+        if CHECKPOINT_PATH:
+            print(f"📂 嘗試從指定 checkpoint 載入...")
+            population = self._load_checkpoint(CHECKPOINT_PATH)
+
+        if population is None:
+            # 如果沒有指定 checkpoint 或載入失敗，使用原本的邏輯
+            print("📊 使用隨機初始化 + 歷史精英注入")
+            population = self.toolbox.population(n=POPULATION_SIZE)
+            population = self.pareto_mgr.inject_elites(population, ratio=0.3)
+        else:
+            # 🔥 從 checkpoint 載入成功，補充到目標族群大小
+            if len(population) < POPULATION_SIZE:
+                n_random = POPULATION_SIZE - len(population)
+                print(f"   補充 {n_random} 個隨機個體")
+                for _ in range(n_random):
+                    population.append(self.toolbox.individual())
+            elif len(population) > POPULATION_SIZE:
+                # 只保留前 N 個
+                population = population[:POPULATION_SIZE]
+                print(f"   截取前 {POPULATION_SIZE} 個個體")
 
         # 初始評估
         population = self._evaluate_population(population)
