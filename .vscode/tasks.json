@@ -2,18 +2,19 @@
     "version": "2.0.0",
     "tasks": [
         {
-            "label": "🐉 十二組合天空龍 - 不間斷執行",
+            "label": "🐉 十二組合天空龍 - 視窗 1 不間斷執行",
             "type": "shell",
             "command": "python",
             "args": [
                 "${workspaceFolder}/sky_dragon_continuous_runner.py",
-                "--mode", "continuous"
+                "--mode", "continuous",
+                "--window", "1"
             ],
             "options": {
                 "cwd": "${workspaceFolder}",
                 "env": {
                     "PYTHONUNBUFFERED": "1",
-                    "FINLAB_DISABLE_CACHE": "1"
+                    "FINLAB_API_KEY": "R5XcZHGBZgEO5zz+6e1iYAe3wcFiimTUNaCMKsnZEiM42Wp49xW46MySUZT1W/Ee#vip_m"
                 }
             },
             "problemMatcher": [],
@@ -29,24 +30,70 @@
             }
         },
         {
-            "label": "🐉 十二組合天空龍 - 單次執行",
+            "label": "🐉 十二組合天空龍 - 視窗 2 不間斷執行",
             "type": "shell",
             "command": "python",
             "args": [
                 "${workspaceFolder}/sky_dragon_continuous_runner.py",
-                "--mode", "single"
+                "--mode", "continuous",
+                "--window", "2"
             ],
             "options": {
                 "cwd": "${workspaceFolder}",
                 "env": {
                     "PYTHONUNBUFFERED": "1",
-                    "FINLAB_DISABLE_CACHE": "1"
+                    "FINLAB_API_KEY": "R5XcZHGBZgEO5zz+6e1iYAe3wcFiimTUNaCMKsnZEiM42Wp49xW46MySUZT1W/Ee#vip_m"
                 }
             },
             "problemMatcher": [],
             "presentation": {
                 "reveal": "always",
                 "panel": "new"
+            },
+            "isBackground": true
+        },
+        {
+            "label": "🐉 十二組合天空龍 - 視窗 3 不間斷執行",
+            "type": "shell",
+            "command": "python",
+            "args": [
+                "${workspaceFolder}/sky_dragon_continuous_runner.py",
+                "--mode", "continuous",
+                "--window", "3"
+            ],
+            "options": {
+                "cwd": "${workspaceFolder}",
+                "env": {
+                    "PYTHONUNBUFFERED": "1",
+                    "FINLAB_API_KEY": "R5XcZHGBZgEO5zz+6e1iYAe3wcFiimTUNaCMKsnZEiM42Wp49xW46MySUZT1W/Ee#vip_m"
+                }
+            },
+            "problemMatcher": [],
+            "presentation": {
+                "reveal": "always",
+                "panel": "new"
+            },
+            "isBackground": true
+        },
+        {
+            "label": "🐉 十二組合天空龍 - 啟動全部 3 視窗",
+            "type": "shell",
+            "command": "python",
+            "args": [
+                "${workspaceFolder}/sky_dragon_continuous_runner.py",
+                "--mode", "all"
+            ],
+            "options": {
+                "cwd": "${workspaceFolder}",
+                "env": {
+                    "PYTHONUNBUFFERED": "1",
+                    "FINLAB_API_KEY": "R5XcZHGBZgEO5zz+6e1iYAe3wcFiimTUNaCMKsnZEiM42Wp49xW46MySUZT1W/Ee#vip_m"
+                }
+            },
+            "problemMatcher": [],
+            "presentation": {
+                "reveal": "always",
+                "panel": "shared"
             }
         },
         {
@@ -68,25 +115,12 @@
             "isBackground": true
         },
         {
-            "label": "🛑 停止所有策略",
+            "label": "📈 查看十二策略說明",
             "type": "shell",
             "command": "python",
             "args": [
                 "${workspaceFolder}/sky_dragon_continuous_runner.py",
-                "--mode", "stop"
-            ],
-            "options": {
-                "cwd": "${workspaceFolder}"
-            },
-            "problemMatcher": []
-        },
-        {
-            "label": "📈 查看最佳結果",
-            "type": "shell",
-            "command": "python",
-            "args": [
-                "${workspaceFolder}/sky_dragon_continuous_runner.py",
-                "--mode", "results"
+                "--mode", "strategies"
             ],
             "options": {
                 "cwd": "${workspaceFolder}"
@@ -95,6 +129,27 @@
             "presentation": {
                 "reveal": "always",
                 "panel": "shared"
+            }
+        },
+        {
+            "label": "🔧 直接執行原始腳本 (視窗 1)",
+            "type": "shell",
+            "command": "python",
+            "args": [
+                "${workspaceFolder}/十二組合快快龍_優化版_高胃納量.py",
+                "--window", "1"
+            ],
+            "options": {
+                "cwd": "${workspaceFolder}",
+                "env": {
+                    "PYTHONUNBUFFERED": "1",
+                    "FINLAB_API_KEY": "R5XcZHGBZgEO5zz+6e1iYAe3wcFiimTUNaCMKsnZEiM42Wp49xW46MySUZT1W/Ee#vip_m"
+                }
+            },
+            "problemMatcher": [],
+            "presentation": {
+                "reveal": "always",
+                "panel": "new"
             }
         }
     ]
