@@ -456,30 +456,84 @@ class DiscordNotifier:
 notifier = DiscordNotifier(DISCORD_WEBHOOK_URL)
 
 # =============================================================================
-# 數據載入
+# 數據載入 (完整版 - 包含所有策略需要的數據)
 # =============================================================================
-print("\n📊 載入市場數據...")
+print("\n📊 載入市場數據 (完整版)...")
 data_start = time.time()
 
+# === 價格數據 ===
 close = data.get('price:收盤價')
 vol = data.get('price:成交股數')
 open_ = data.get('price:開盤價')
 high = data.get('price:最高價')
 low = data.get('price:最低價')
+adj_close = data.get("etl:adj_close")
 
+# === 估值數據 ===
 pe = data.get('price_earning_ratio:本益比')
 pb = data.get("price_earning_ratio:股價淨值比")
 dividend_yield = data.get('price_earning_ratio:殖利率(%)')
 
+# === 月營收數據 ===
 rev = data.get('monthly_revenue:當月營收')
 rev_yoy = data.get('monthly_revenue:去年同月增減(%)')
 rev_mom = data.get('monthly_revenue:上月比較增減(%)')
+rev_ma3 = rev.average(3)
+rev_ma12 = rev.average(12)
 
+# === 基本面數據 ===
+營業利益成長率 = data.get('fundamental_features:營業利益成長率')
+業外收支營收率 = data.get('fundamental_features:業外收支營收率')
+營業毛利率 = data.get("fundamental_features:營業毛利率")
+ROE綜合損益 = data.get("fundamental_features:ROE綜合損益")
+稅後淨利率 = data.get("fundamental_features:稅後淨利率")
+稅前淨利率 = data.get("fundamental_features:稅前淨利率")
+營業利益率 = data.get('fundamental_features:營業利益率')
+
+# === 籌碼數據 ===
+融資使用率 = data.get('margin_transactions:融資使用率')
+董監持有股數占比 = data.get("internal_equity_changes:董監持有股數占比")
+inventory = data.get("inventory")
+
+# === 財務報表數據 ===
+股本 = data.get('financial_statement:股本')
+投資活動淨現金 = data.get('financial_statement:投資活動之淨現金流入_流出')
+營業活動淨現金 = data.get('financial_statement:營業活動之淨現金流入_流出')
+自由現金流 = (投資活動淨現金 + 營業活動淨現金).rolling(4).mean()
+稅後淨利 = data.get('fundamental_features:經常稅後淨利')
+權益總計 = data.get('financial_statement:股東權益總額')
+股東權益報酬率 = 稅後淨利 / 權益總計
+
+# === 市值與成交金額 ===
 市值 = data.get('etl:market_value')
 成交金額 = (close * vol).replace(0.0, np.nan)
 平均成交金額 = 成交金額.average(20)
 
-rsi = data.indicator("RSI", adjust_price=False, resample="D", timeperiod=14)
+# === 當月營收計算市值營收比 ===
+當月營收 = data.get('monthly_revenue:當月營收') * 1000
+當季營收 = 當月營收.rolling(4).sum()
+市值營收比 = 市值 / 當季營收
+
+# === 技術指標 ===
+rsi = data.indicator("RSI", adjust_price=False, resample="D", timeperiod=5)
+atr = data.indicator('ATR', adjust_price=True, timeperiod=10)
+entry_volatility = atr / adj_close
+
+# === 漲停計算 ===
+limit_up = (close > close.shift(1) * 1.095)
+entry_close = (close * close).replace(0.0, np.nan)
+entry_high = (close * high).replace(0.0, np.nan)
+entry_low = (close * low).replace(0.0, np.nan)
+entry_open = (close * open_).replace(0.0, np.nan)
+
+close_vs_high = (entry_close == entry_high).replace(False, np.nan)
+close_vs_low = (entry_close == entry_low).replace(False, np.nan)
+close_vs_open = (entry_close == entry_open).replace(False, np.nan)
+close_high_low = (close_vs_high == close_vs_low).replace(False, np.nan)
+close_high_open = (close_vs_high == close_vs_open).replace(False, np.nan)
+close_high_low_open = (close_high_low == close_high_open).replace(False, np.nan)
+limit_up_all_day = (close_high_low_open == limit_up)
+limit_up_all_day = limit_up_all_day.fillna(False)
 
 print(f"✅ 數據載入完成 ({time.time()-data_start:.1f}秒)")
 print(f"   股票數: {len(close.columns)}, 期間: {close.index[0].date()} ~ {close.index[-1].date()}")
@@ -833,75 +887,143 @@ def safe_condition(cond):
         return cond * 0
 
 # =============================================================================
-# gene_to_params
+# gene_to_params (完整版 - 160 參數全用)
 # =============================================================================
 def gene_to_params(gene):
+    """將基因轉換為策略參數 (完整版)"""
     if not isinstance(gene, list):
         gene = list(gene)
 
     required_length = 160
-    if len(gene) < required_length:
-        gene = gene + [0.5] * (required_length - len(gene))
-    gene = gene[:required_length]
+    current_length = len(gene)
 
+    if current_length < required_length:
+        extension = [0.0] * (required_length - current_length)
+        gene = gene + extension
+    elif current_length > required_length:
+        gene = gene[:required_length]
+
+    # === 策略配置權重 (gene[0:6]) ===
     alloc_sum = sum(gene[0:6])
-    allocation = [gene[i]/alloc_sum for i in range(6)] if alloc_sum > 0 else [1/6]*6
+    if alloc_sum == 0:
+        allocation = [1/6] * 6
+    else:
+        allocation = [gene[i]/alloc_sum for i in range(6)]
 
+    # === 策略1: 低波動本益比策略參數 ===
     low_vol_pe_params = {
-        'pe_min': gene[12] * 20,
-        'pe_max': gene[13] * 30 + 10,
-        'pb_min': gene[135] * 2,
-        'pb_max': gene[136] * 5 + 1,
-        'min_volume': abs(gene[11] * 500) + 100,
-        'top_n': max(3, int(gene[14] * 10) + 5),
-        'ma_short': max(5, int(gene[130] * 20)),
-        'ma_long': max(20, int(gene[132] * 100) + 60),
+        'rev_ma3_ma12_ratio': gene[6],
+        'rev_consistency': gene[7],
+        'volatility_threshold': gene[8]/1000,
+        'margin_usage_limit': gene[9],
+        'non_op_income_limit': gene[10],
+        'min_volume': abs(gene[11] * 1000),
+        'pe_min': gene[12],
+        'pe_max': gene[13],
+        'top_n': max(1, int(gene[14])),
+        'min_rev_yoy_threshold': -gene[120],
+        'rev_decline_period': max(1, int(gene[121])),
+        'max_rev_yoy_threshold': gene[122],
+        'old_trend_period': max(1, int(gene[123])),
+        'old_trend_match': max(1, int(gene[124])),
+        'rev_bottom_window': max(1, int(gene[125])),
+        'rev_bottom_ratio': gene[126],
+        'rev_bottom_sustain': max(1, int(gene[127])),
+        'min_rev_mom_growth': -gene[128],
+        'rev_mom_sustain': max(1, int(gene[129])),
+        'quarter_ma': max(1, int(gene[130])),
+        'half_year_ma': max(1, int(gene[131])),
+        'long_ma': max(1, int(gene[132])),
+        'recent_rev_period': max(1, int(gene[133])),
+        'annual_rev_period': max(1, int(gene[134])),
+        'pb_min': gene[135],
+        'pb_max': gene[136],
+        'min_gpm': gene[137],
+        'gpm_sustain_period': max(1, int(gene[138])),
+        'min_roe': gene[139],
+        'roe_sustain_period': max(1, int(gene[140]))
     }
 
+    # === 策略2: 小資族策略參數 ===
     small_inv_params = {
-        'market_value_limit': gene[15] * 50e9 + 10e9,
-        'min_volume': abs(gene[21] * 500) + 100,
-        'top_n': max(3, int(gene[22] * 10) + 5),
-        'ma_period': max(5, int(gene[20] * 30) + 10),
+        'market_value_limit': gene[15] * 1e9,
+        'market_rev_ratio_limit': gene[16],
+        'rev_yoy_growth_limit': -gene[17],
+        'rev_mom_growth_limit': -gene[18],
+        'rsv_period': max(1, int(gene[19])),
+        'ma_period': max(1, int(gene[20])),
+        'volume_threshold': abs(gene[21] * 1000),
+        'top_n': max(1, int(gene[22])),
+        'min_free_cash_flow': gene[150],
+        'min_roe': gene[151],
+        'min_op_profit_growth': gene[152]
     }
 
+    # === 策略3: 營收股價雙渦輪策略參數 ===
     turbo_params = {
-        'min_volume': abs(gene[26] * 500) + 100,
-        'min_price': gene[27] * 50 + 10,
-        'top_n': max(3, int(gene[30] * 10) + 5),
-        'momentum_period': max(5, int(gene[23] * 20) + 5),
+        'rev_ma_period': max(1, int(gene[23])),
+        'rev_ma_lookback': max(1, int(gene[24])),
+        'price_high_window': max(1, int(gene[25])),
+        'min_volume': abs(gene[26] * 1000),
+        'min_price': gene[27],
+        'rsi_threshold': gene[28],
+        'pe_limit': gene[29],
+        'top_n': max(1, int(gene[30])),
+        'performance_ma_period': max(1, int(gene[100])),
+        'performance_threshold': gene[101],
+        'rsi_trend_period': max(1, int(gene[102])),
+        'min_gpm': gene[103],
+        'gpm_sustain_period': max(1, int(gene[104])),
+        'min_btpm': gene[105],
+        'btpm_sustain_period': max(1, int(gene[106])),
+        'min_atpm': gene[107],
+        'atpm_sustain_period': max(1, int(gene[108])),
+        'rev_growth_percentile': gene[109],
+        'boss_min_level': max(1, int(gene[110])),
+        'boss_max_level': max(1, int(gene[111])),
+        'min_boss_ratio': gene[112]
     }
 
-    high_yield_params = {
-        'min_yield': gene[31] * 5 + 2,
-        'min_volume': gene[34] * 500 + 100,
-        'max_volume': gene[35] * 5000 + 2000,
-        'top_n': max(3, int(gene[36] * 10) + 5),
+    # === 策略4: 高殖利率烏龜策略參數 ===
+    high_yield_turtle_params = {
+        'min_yield_ratio': gene[31],
+        'min_op_earn_ratio': gene[32],
+        'min_boss_hold': gene[33],
+        'min_volume': gene[34] * 1000,
+        'max_volume': gene[35] * 1000,
+        'top_n': int(gene[36])
     }
 
-    low_vol_params = {
-        'min_volume': gene[37] * 500 + 100,
-        'std_window': max(10, int(gene[38] * 50) + 20),
-        'std_threshold': gene[39] * 0.5 + 0.1,
-        'top_n': max(3, int(gene[40] * 10) + 5),
+    # === 策略5: 低波動性指標策略參數 ===
+    low_vol_index_params = {
+        'min_volume': gene[37] * 1000,
+        'std_window': int(gene[38]),
+        'std_threshold': gene[39],
+        'top_n': int(gene[40])
     }
 
-    market_params = {
-        'new_high_window': max(20, int(gene[43] * 200) + 60),
-        'min_volume': gene[48] * 500 + 100,
-        'top_n': max(3, int(gene[49] * 10) + 5),
+    # === 策略6: 藏獒外掛大盤指針策略參數 ===
+    market_indicator_params = {
+        'new_high_window': int(gene[43]),
+        'min_year_growth': -gene[44],
+        'max_year_growth': gene[45],
+        'rev_bottom_ratio': gene[46],
+        'min_month_growth': -gene[47],
+        'min_volume': gene[48] * 1000,
+        'top_n': int(gene[49])
     }
 
+    # === 總體參數 ===
     overall_params = {
-        'stop_loss': gene[51] * 0.15 + 0.05,
-        'trail_stop': gene[52] * 0.1 + 0.03,
-        'take_profit': gene[53] * 0.3 + 0.15,
-        'position_limit': gene[54] * 0.2 + 0.2,
-        'trade_at_price': 'close',
-        'liquidity_threshold': gene[56] * 5e6 + 1e6,
+        'stop_loss': gene[51]/100,
+        'trail_stop': gene[52]/100,
+        'take_profit': gene[53]/100,
+        'position_limit': gene[54]/100,
+        'trade_at_price': ["open", "close", "high_low_avg", "open_close_avg"][int(gene[55]) % 4],
+        'liquidity_threshold': gene[56] * 1e6,
     }
 
-    return allocation, low_vol_pe_params, small_inv_params, turbo_params, high_yield_params, low_vol_params, market_params, overall_params
+    return allocation, low_vol_pe_params, small_inv_params, turbo_params, high_yield_turtle_params, low_vol_index_params, market_indicator_params, overall_params
 
 
 # =============================================================================
@@ -942,105 +1064,324 @@ def get_adaptive_top_n(close_df, base_top_n, sentiment=None):
 
 
 # =============================================================================
-# 策略函數
+# 策略函數 (完整版 - 包含所有條件)
 # =============================================================================
+
 def strategy_low_vol_pe(params):
+    """策略1: 低波動本益比策略 (完整版)"""
     try:
-        pe_cond = (pe >= params['pe_min']) & (pe <= params['pe_max'])
-        pb_cond = (pb >= params['pb_min']) & (pb <= params['pb_max'])
-        vol_cond = vol.average(5) > params['min_volume']
-        ma_cond = close > close.average(params['ma_long'])
+        # PEG 計算
+        peg = pe / 營業利益成長率
 
-        score = safe_condition(pe_cond & pb_cond & vol_cond & ma_cond)
-        score = score / (pe.fillna(999) + 1)
+        # 營收條件
+        cond1 = rev_ma3 / rev_ma12 > params['rev_ma3_ma12_ratio']
+        cond2 = rev / rev.shift(1) > params['rev_consistency']
 
-        position = score[score > 0].is_smallest(params['top_n'])
+        # 篩選條件
+        tree_select_factor = (
+            (融資使用率 <= params['margin_usage_limit']) &
+            (entry_volatility <= params['volatility_threshold']) &
+            (業外收支營收率 < params['non_op_income_limit'])
+        )
+
+        # 成交量條件
+        condition_近1日成交均量大於閾值 = vol.average(1) > params['min_volume']
+
+        # 排除月營收連續衰退
+        cond排除月營收連3月衰退 = ~(rev_yoy < params['min_rev_yoy_threshold']).sustain(params['rev_decline_period'])
+
+        # 排除營收成長趨勢過老
+        cond排除月營收成長趨勢過老 = ~(rev_yoy > params['max_rev_yoy_threshold']).sustain(
+            params['old_trend_period'], params['old_trend_match'])
+
+        # 確認營收底部
+        cond確認營收底部 = ((rev.rolling(params['rev_bottom_window']).min()) / rev < params['rev_bottom_ratio']).sustain(
+            params['rev_bottom_sustain'])
+
+        # 單月營收月增率
+        cond單月營收月增率 = (rev_mom > params['min_rev_mom_growth']).sustain(params['rev_mom_sustain'])
+
+        # 收盤價大於均線
+        cond收盤價大於季線及半年線 = (
+            (close > close.average(params['quarter_ma'])) &
+            (close > close.average(params['half_year_ma'])) &
+            (close > close.average(params['long_ma']))
+        )
+
+        # 近期營收大於年營收
+        cond近三個月營收大於年營收 = rev.average(params['recent_rev_period']) > rev.average(params['annual_rev_period'])
+
+        # PE/PB 範圍
+        pe_range_1 = (params['pe_min'] <= pe) & (pe <= params['pe_max'])
+        pb_range_1 = (params['pb_min'] <= pb) & (pb <= params['pb_max'])
+
+        # 毛利率趨勢
+        gpm_trend_1 = (營業毛利率 > params['min_gpm']).sustain(params['gpm_sustain_period'])
+
+        # ROE趨勢
+        roe_trend_1 = (ROE綜合損益 > params['min_roe']).sustain(params['roe_sustain_period'])
+
+        # 集保小戶佔比
+        small_inv_under50 = (inventory[(inventory.持股分級.astype(int) <= 8)]
+                             .reset_index()
+                             .groupby(["date", "stock_id"])
+                             .agg({"占集保庫存數比例": "sum"})
+                             .reset_index()
+                             .pivot(index="date", columns="stock_id", values="占集保庫存數比例")) <= 46
+
+        # 合併所有條件
+        cond_all = (cond1 & cond2 & tree_select_factor & cond排除月營收成長趨勢過老 &
+                    cond排除月營收連3月衰退 & cond收盤價大於季線及半年線 & cond近三個月營收大於年營收 &
+                    cond單月營收月增率 & ~(limit_up_all_day) & condition_近1日成交均量大於閾值 &
+                    gpm_trend_1 & roe_trend_1 & small_inv_under50 & pb_range_1 & pe_range_1)
+
+        # 選擇最小 PEG
+        position = peg[cond_all & (peg > 0)].is_smallest(params['top_n'])
+        position = position.reindex(rev.index_str_to_date().index, method='ffill')
         return position.fillna(0).astype(float)
+
     except Exception as e:
         print(f"   ⚠️ strategy_low_vol_pe 錯誤: {e}")
         return pd.DataFrame(0.0, index=close.index, columns=close.columns)
 
+
 def strategy_small_cap(params):
+    """策略2: 小資族策略 (完整版)"""
     try:
-        cap_cond = 市值 < params['market_value_limit']
-        vol_cond = vol.average(5) > params['min_volume']
-        growth_cond = rev_yoy > 0
-        ma_cond = close > close.average(params['ma_period'])
+        # 市值條件
+        cond1 = 市值 < params['market_value_limit']
 
-        score = safe_condition(cap_cond & vol_cond & growth_cond & ma_cond)
-        score = score * rev_yoy.fillna(0).clip(lower=0)
+        # 自由現金流
+        cond2 = 自由現金流 > params['min_free_cash_flow']
 
-        position = score[score > 0].is_largest(params['top_n'])
+        # 股東權益報酬率
+        cond3 = 股東權益報酬率 > params['min_roe']
+
+        # 營業利益成長率
+        cond4 = 營業利益成長率 > params['min_op_profit_growth']
+
+        # 市值營收比
+        cond5 = 市值營收比 < params['market_rev_ratio_limit']
+
+        # 成交量
+        cond6 = vol > params['volume_threshold']
+
+        # 排除月營收連3月衰退
+        cond排除月營收連3月衰退 = ~(rev_yoy < params['rev_yoy_growth_limit']).sustain(3)
+
+        # 排除營收成長趨勢過老
+        cond排除月營收成長趨勢過老 = ~(rev_yoy > 60).sustain(12, 8)
+
+        # 確認營收底部
+        cond確認營收底部 = ((rev.rolling(12).min()) / rev < 1.2).sustain(3)
+
+        # 單月營收月增率連續3月大於閾值
+        cond單月營收月增率連續3月大於閾值 = (rev_mom > params['rev_mom_growth_limit']).sustain(3)
+
+        # 收盤價大於均線
+        ma_period = params['ma_period']
+        cond收盤價大於均線 = (close > close.average(ma_period)) & (close > close.average(ma_period * 2))
+
+        # 近三個月營收大於年營收
+        cond近三個月營收大於年營收 = rev.average(3) > rev.average(12)
+
+        # 業外收支營收率佔比低
+        業外收支營收率占比低 = 業外收支營收率 < 7.3
+
+        # RSV 計算
+        rsv_period = params['rsv_period']
+        rsv = (close - close.rolling(rsv_period).min()) / (
+            close.rolling(rsv_period).max() - close.rolling(rsv_period).min())
+
+        # 合併條件並依 RSV 排序
+        position = ((cond1 & cond2 & cond3 & cond4 & cond5 & cond6 & cond排除月營收成長趨勢過老 &
+                     cond單月營收月增率連續3月大於閾值 & cond排除月營收連3月衰退 & cond近三個月營收大於年營收 &
+                     cond收盤價大於均線 & 業外收支營收率占比低 & cond確認營收底部) * rsv).is_largest(params['top_n'])
+
+        position = position.reindex(當月營收.index_str_to_date().index, method='ffill')
         return position.fillna(0).astype(float)
+
     except Exception as e:
         print(f"   ⚠️ strategy_small_cap 錯誤: {e}")
         return pd.DataFrame(0.0, index=close.index, columns=close.columns)
 
+
 def strategy_turbo(params):
+    """策略3: 營收股價雙渦輪策略 (完整版)"""
     try:
-        vol_cond = vol.average(5) > params['min_volume']
-        price_cond = close > params['min_price']
+        rev_ma_period = max(1, int(params['rev_ma_period']))
+        rev_ma = rev.average(rev_ma_period)
+        rev_ma_lookback = max(rev_ma_period + 1, int(params['rev_ma_lookback']))
 
-        momentum = close / close.shift(params['momentum_period']) - 1
-        momentum_cond = momentum > 0
+        # 近N月平均營收創M個月來新高
+        condition_近N月平均營收創M個月來新高 = rev_ma == rev_ma.rolling(rev_ma_lookback, min_periods=1).max()
 
-        rev_ma = rev.average(3)
-        rev_new_high = rev_ma >= rev_ma.rolling(12, min_periods=1).max()
+        # 近N日內有1日股價創新高
+        price_high_window = max(1, int(params['price_high_window']))
+        condition_近N日內有1日股價創新高 = (close == close.rolling(260).max()).sustain(price_high_window, 1)
 
-        score = safe_condition(vol_cond & price_cond & momentum_cond & rev_new_high)
-        score = score * momentum.fillna(0).clip(lower=0)
+        # 成交量條件
+        condition_成交均量大於閾值 = vol.average(1) > params['min_volume']
 
-        position = score[score > 0].is_largest(params['top_n'])
+        # 多頭均線排列
+        long_ma_pattern = (
+            (close > close.average(5)) &
+            (close > close.average(10)) &
+            (close > close.average(20)) &
+            (close > close.average(60)) &
+            (close > close.average(120))
+        )
+
+        # 收盤價超級績效
+        收盤價_超級績效 = close > (close.average(params['performance_ma_period']) * params['performance_threshold'])
+
+        # RSI 高趨勢
+        rsi_higt_trend = (rsi > params['rsi_threshold']).sustain(params['rsi_trend_period'])
+
+        # 毛利率趨勢
+        gpm_trend_1 = (營業毛利率 > params['min_gpm']).sustain(params['gpm_sustain_period'])
+
+        # 稅前淨利率趨勢
+        btpm_trend_1 = (稅前淨利率 > params['min_btpm']).sustain(params['btpm_sustain_period'])
+
+        # 稅後淨利率趨勢
+        atpm_trend_1 = (稅後淨利率 > params['min_atpm']).sustain(params['atpm_sustain_period'])
+
+        # 營收年增百分位排名
+        rev_rise_nsatisfy_2 = rev_yoy.rank(pct=True, axis=1) > params['rev_growth_percentile']
+
+        # 集保大戶佔比
+        boss_inventory_over400 = (inventory[
+            (inventory.持股分級.astype(int) >= params['boss_min_level']) &
+            (inventory.持股分級.astype(int) <= params['boss_max_level'])]
+            .reset_index()
+            .groupby(["date", "stock_id"])
+            .agg({"占集保庫存數比例": "sum"})
+            .reset_index()
+            .pivot(index="date", columns="stock_id", values="占集保庫存數比例")) >= params['min_boss_ratio']
+
+        # PE 上限
+        pe_limit = params['pe_limit']
+        pe_range_1 = pe_limit <= pe
+
+        # 最低價格
+        min_price = params['min_price']
+
+        # 合併所有條件
+        conditions = (
+            condition_近N月平均營收創M個月來新高 & condition_近N日內有1日股價創新高 &
+            condition_成交均量大於閾值 & long_ma_pattern & gpm_trend_1 & btpm_trend_1 &
+            atpm_trend_1 & rev_rise_nsatisfy_2 & (close > min_price) & (業外收支營收率 < 7.3) &
+            ~pe_range_1 & 收盤價_超級績效 & (vol >= vol.rolling(20).mean() * 0.8) &
+            rsi_higt_trend & boss_inventory_over400 & ~limit_up_all_day
+        )
+
+        # 依營收年增排序
+        position = rev_yoy * conditions
+        position = position[position > 0].is_largest(params['top_n'])
+        position = position.reindex(rev.index_str_to_date().index, method="ffill")
         return position.fillna(0).astype(float)
+
     except Exception as e:
         print(f"   ⚠️ strategy_turbo 錯誤: {e}")
         return pd.DataFrame(0.0, index=close.index, columns=close.columns)
 
+
 def strategy_high_yield(params):
+    """策略4: 高殖利率烏龜策略 (完整版)"""
     try:
-        yield_cond = dividend_yield >= params['min_yield']
-        vol_cond = (vol.average(5) >= params['min_volume']) & (vol.average(5) <= params['max_volume'])
-        trend_cond = (close > close.average(20)) & (close > close.average(60))
-        rev_cond = rev.average(3) > rev.average(12)
+        sma20 = close.average(20)
+        sma60 = close.average(60)
 
-        score = safe_condition(yield_cond & vol_cond & trend_cond & rev_cond)
-        score = score * dividend_yield.fillna(0)
+        # 殖利率條件
+        cond1 = dividend_yield >= params['min_yield_ratio']
 
-        position = score[score > 0].is_largest(params['top_n'])
+        # 趨勢條件
+        cond2 = (close > sma20) & (close > sma60)
+
+        # 營收條件
+        cond3 = rev.average(3) > rev.average(12)
+
+        # 營業利益率條件
+        cond4 = 營業利益率 >= params['min_op_earn_ratio']
+
+        # 董監持股條件
+        cond5 = 董監持有股數占比 >= params['min_boss_hold']
+
+        # 成交量範圍
+        cond6 = (vol.average(5) >= params['min_volume']) & (vol.average(5) <= params['max_volume'])
+
+        # 合併條件
+        cond_all = cond1 & cond2 & cond3 & cond4 & cond5 & cond6
+        cond_all = cond_all * rev_yoy
+
+        # 依營收年增排序
+        position = cond_all[cond_all > 0].is_largest(params['top_n'])
+        position = position.reindex(rev.index_str_to_date().index, method='ffill')
         return position.fillna(0).astype(float)
+
     except Exception as e:
         print(f"   ⚠️ strategy_high_yield 錯誤: {e}")
         return pd.DataFrame(0.0, index=close.index, columns=close.columns)
 
+
 def strategy_low_vol(params):
+    """策略5: 低波動性指標策略 (完整版)"""
     try:
-        vol_cond = vol.average(20) > params['min_volume']
-        trend_cond = (close > close.average(60)) & (close > close.average(120))
+        cap = 市值
 
-        returns = close.pct_change()
-        volatility = returns.rolling(params['std_window']).std()
-        vol_rank = volatility.rank(axis=1, pct=True)
-        low_vol_cond = vol_rank < params['std_threshold']
+        # 波動率排名
+        std = close.pct_change().rolling(params['std_window']).std().rank(axis=1, pct=True)
 
-        score = safe_condition(vol_cond & trend_cond & low_vol_cond)
-        score = score * 市值.fillna(0)
+        # 條件組合
+        position = cap[
+            (vol.average(20) > params['min_volume']) &
+            (close > close.average(60)) &
+            (close > close.average(120)) &
+            (close > close.average(250)) &
+            (std < params['std_threshold'])
+        ].is_smallest(params['top_n'])
 
-        position = score[score > 0].is_smallest(params['top_n'])
+        position = position.reindex(close.index_str_to_date().index, method='ffill')
         return position.fillna(0).astype(float)
+
     except Exception as e:
         print(f"   ⚠️ strategy_low_vol 錯誤: {e}")
         return pd.DataFrame(0.0, index=close.index, columns=close.columns)
 
+
 def strategy_market(params):
+    """策略6: 藏獒外掛大盤指針策略 (完整版)"""
     try:
-        new_high = close >= close.rolling(params['new_high_window'], min_periods=1).max()
-        vol_cond = vol.average(10) > params['min_volume']
+        vol_ma = vol.average(10)
 
-        score = safe_condition(new_high & vol_cond)
-        score = score * vol.average(10).fillna(0)
+        # 股價創新高
+        cond1 = close == close.rolling(params['new_high_window']).max()
 
-        position = score[score > 0].is_smallest(params['top_n'])
+        # 排除月營收連3月衰退
+        cond2 = ~(rev_yoy < params['min_year_growth']).sustain(3)
+
+        # 排除營收成長趨勢過老
+        cond3 = ~(rev_yoy > params['max_year_growth']).sustain(12, 8)
+
+        # 確認營收底部
+        cond4 = ((rev.rolling(12).min()) / rev < params['rev_bottom_ratio']).sustain(3)
+
+        # 月營收月增率連續3月
+        cond5 = (rev_mom > params['min_month_growth']).sustain(3)
+
+        # 成交量條件
+        cond6 = vol_ma > params['min_volume']
+
+        # 合併條件
+        buy = cond1 & cond2 & cond3 & cond4 & cond5 & cond6
+        buy = vol_ma * buy
+        buy = buy[buy > 0]
+        buy = buy.is_smallest(params['top_n'])
+
+        position = buy.reindex(rev.index_str_to_date().index, method='ffill')
         return position.fillna(0).astype(float)
+
     except Exception as e:
         print(f"   ⚠️ strategy_market 錯誤: {e}")
         return pd.DataFrame(0.0, index=close.index, columns=close.columns)
