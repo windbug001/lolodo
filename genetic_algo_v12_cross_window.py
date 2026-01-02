@@ -152,7 +152,7 @@ OVERFIT_SHARPE_RATIO = 0.6   # 測試期夏普 / 訓練期夏普 < 0.6 則警告
 OVERFIT_RETURN_RATIO = 0.5   # 測試期報酬 / 訓練期報酬 < 0.5 則警告
 
 print(f"{'='*80}")
-print(f"🚀 六組合快快龍 v12.3 (完整版) - Window {WINDOW_ID}")
+print(f"🚀 六組合快快龍 v12.4 (完整版) - Window {WINDOW_ID}")
 print(f"   🎯 目標：夏普 >= {TARGET_SHARPE}, 胃納量 >= {MIN_CAPACITY/1e4:.0f}萬")
 print(f"   📉 最大回檔限制：{MAX_DRAWDOWN*100:.0f}%")
 print(f"   🔄 視窗交互：每 {CROSS_WINDOW_INTERVAL} 代交換 Top {CROSS_WINDOW_TOP_N} 基因")
