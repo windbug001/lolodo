@@ -1109,6 +1109,11 @@ def combined_strategy(gene, apply_normalization=True, start_date=None, end_date=
         liquid = 平均成交金額 > overall['liquidity_threshold']
         combined = combined * liquid.astype(float)
 
+        # 🔥 關鍵修正：reindex 到月營收截止日（稀疏 index）
+        # 這樣 stop_loss 才能在非換股日正確生效
+        monthly_rev_index = rev.index_str_to_date().index
+        combined = combined.reindex(monthly_rev_index, method='ffill')
+
         if not isinstance(combined.index, pd.DatetimeIndex):
             combined.index = pd.to_datetime(combined.index, errors='coerce')
 
@@ -1144,15 +1149,16 @@ def run_backtest(gene, upload=False, name="Strategy"):
         # 🔥 應用 3% 持股約束
         position = position_weight_mgr.normalize_position(position)
 
+        # 🔥 修正：resample='D' 配合稀疏月營收 index = 月營收截止日換股
+        # stop_loss 在非換股日可正確生效
         report = sim(
             position=position,
-            stop_loss=params.get('stop_loss', 0.1),
-            trail_stop=params.get('trail_stop', 0.05),
+            resample='D',  # 🔥 配合月營收稀疏 index
+            stop_loss=MAX_DRAWDOWN,  # 🔥 使用統一的最大回檔限制
             fee_ratio=FEE_RATIO,
             tax_ratio=TAX_RATIO,
             trade_at_price=params.get('trade_at_price', 'close'),
             position_limit=params.get('position_limit', 0.3),
-            take_profit=params.get('take_profit', 0.3),
             name=name,
             upload=upload
         )
@@ -1195,15 +1201,15 @@ def run_backtest_period(gene, start_date, end_date, name="Strategy"):
         # 🔥 應用 3% 持股約束
         position = position_weight_mgr.normalize_position(position)
 
+        # 🔥 修正：resample='D' 配合稀疏月營收 index = 月營收截止日換股
         report = sim(
             position=position,
-            stop_loss=params.get('stop_loss', 0.1),
-            trail_stop=params.get('trail_stop', 0.05),
+            resample='D',  # 🔥 配合月營收稀疏 index
+            stop_loss=MAX_DRAWDOWN,  # 🔥 使用統一的最大回檔限制
             fee_ratio=FEE_RATIO,
             tax_ratio=TAX_RATIO,
             trade_at_price=params.get('trade_at_price', 'close'),
             position_limit=params.get('position_limit', 0.3),
-            take_profit=params.get('take_profit', 0.3),
             name=name,
             upload=False
         )
@@ -1279,15 +1285,15 @@ def run_detailed_oos_test(gene, gen):
         # 🔥 應用 3% 持股約束
         train_position = position_weight_mgr.normalize_position(train_position)
 
+        # 🔥 修正：resample='D' 配合稀疏月營收 index = 月營收截止日換股
         train_report = sim(
             position=train_position,
-            stop_loss=params.get('stop_loss', 0.1),
-            trail_stop=params.get('trail_stop', 0.05),
+            resample='D',  # 🔥 配合月營收稀疏 index
+            stop_loss=MAX_DRAWDOWN,  # 🔥 使用統一的最大回檔限制
             fee_ratio=FEE_RATIO,
             tax_ratio=TAX_RATIO,
             trade_at_price=params.get('trade_at_price', 'close'),
             position_limit=params.get('position_limit', 0.3),
-            take_profit=params.get('take_profit', 0.3),
             upload=False,
             name=f"快快龍_W{WINDOW_ID}_Gen{gen}_訓練期"
         )
@@ -1309,15 +1315,15 @@ def run_detailed_oos_test(gene, gen):
         print(f"📊 第 {gen} 代 - 測試期詳細回測 ({TEST_START[:4]}~{TEST_END[:4]})")
         print(f"{'='*60}")
 
+        # 🔥 修正：resample='D' 配合稀疏月營收 index = 月營收截止日換股
         test_report = sim(
             position=test_position,
-            stop_loss=params.get('stop_loss', 0.1),
-            trail_stop=params.get('trail_stop', 0.05),
+            resample='D',  # 🔥 配合月營收稀疏 index
+            stop_loss=MAX_DRAWDOWN,  # 🔥 使用統一的最大回檔限制
             fee_ratio=FEE_RATIO,
             tax_ratio=TAX_RATIO,
             trade_at_price=params.get('trade_at_price', 'close'),
             position_limit=params.get('position_limit', 0.3),
-            take_profit=params.get('take_profit', 0.3),
             upload=False,
             name=f"快快龍_W{WINDOW_ID}_Gen{gen}_測試期"
         )
@@ -1393,9 +1399,11 @@ def evaluate_fitness(gene):
         # 🔥 應用 3% 持股約束
         position = position_weight_mgr.normalize_position(position)
 
+        # 🔥 修正：resample='D' 配合稀疏月營收 index = 月營收截止日換股
         report = sim(
             position=position,
-            stop_loss=params.get('stop_loss', 0.1),
+            resample='D',  # 🔥 配合月營收稀疏 index
+            stop_loss=MAX_DRAWDOWN,  # 🔥 使用統一的最大回檔限制
             fee_ratio=FEE_RATIO,
             tax_ratio=TAX_RATIO,
             upload=False,
