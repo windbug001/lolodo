@@ -1149,16 +1149,17 @@ def run_backtest(gene, upload=False, name="Strategy"):
         # 🔥 應用 3% 持股約束
         position = position_weight_mgr.normalize_position(position)
 
-        # 🔥 修正：resample='D' 配合稀疏月營收 index = 月營收截止日換股
-        # stop_loss 在非換股日可正確生效
+        # 🔥 修正：不使用 resample，讓 position 的月營收稀疏 index 自然換股
+        # 使用 params 中的 stop_loss/trail_stop/take_profit
         report = sim(
             position=position,
-            resample='D',  # 🔥 配合月營收稀疏 index
-            stop_loss=MAX_DRAWDOWN,  # 🔥 使用統一的最大回檔限制
+            stop_loss=params.get('stop_loss', 0.1),
+            trail_stop=params.get('trail_stop', 0.05),
             fee_ratio=FEE_RATIO,
             tax_ratio=TAX_RATIO,
             trade_at_price=params.get('trade_at_price', 'close'),
             position_limit=params.get('position_limit', 0.3),
+            take_profit=params.get('take_profit', 0.3),
             name=name,
             upload=upload
         )
@@ -1201,15 +1202,16 @@ def run_backtest_period(gene, start_date, end_date, name="Strategy"):
         # 🔥 應用 3% 持股約束
         position = position_weight_mgr.normalize_position(position)
 
-        # 🔥 修正：resample='D' 配合稀疏月營收 index = 月營收截止日換股
+        # 🔥 修正：不使用 resample，讓 position 的月營收稀疏 index 自然換股
         report = sim(
             position=position,
-            resample='D',  # 🔥 配合月營收稀疏 index
-            stop_loss=MAX_DRAWDOWN,  # 🔥 使用統一的最大回檔限制
+            stop_loss=params.get('stop_loss', 0.1),
+            trail_stop=params.get('trail_stop', 0.05),
             fee_ratio=FEE_RATIO,
             tax_ratio=TAX_RATIO,
             trade_at_price=params.get('trade_at_price', 'close'),
             position_limit=params.get('position_limit', 0.3),
+            take_profit=params.get('take_profit', 0.3),
             name=name,
             upload=False
         )
@@ -1285,15 +1287,16 @@ def run_detailed_oos_test(gene, gen):
         # 🔥 應用 3% 持股約束
         train_position = position_weight_mgr.normalize_position(train_position)
 
-        # 🔥 修正：resample='D' 配合稀疏月營收 index = 月營收截止日換股
+        # 🔥 修正：不使用 resample，讓 position 的月營收稀疏 index 自然換股
         train_report = sim(
             position=train_position,
-            resample='D',  # 🔥 配合月營收稀疏 index
-            stop_loss=MAX_DRAWDOWN,  # 🔥 使用統一的最大回檔限制
+            stop_loss=params.get('stop_loss', 0.1),
+            trail_stop=params.get('trail_stop', 0.05),
             fee_ratio=FEE_RATIO,
             tax_ratio=TAX_RATIO,
             trade_at_price=params.get('trade_at_price', 'close'),
             position_limit=params.get('position_limit', 0.3),
+            take_profit=params.get('take_profit', 0.3),
             upload=False,
             name=f"快快龍_W{WINDOW_ID}_Gen{gen}_訓練期"
         )
@@ -1315,15 +1318,16 @@ def run_detailed_oos_test(gene, gen):
         print(f"📊 第 {gen} 代 - 測試期詳細回測 ({TEST_START[:4]}~{TEST_END[:4]})")
         print(f"{'='*60}")
 
-        # 🔥 修正：resample='D' 配合稀疏月營收 index = 月營收截止日換股
+        # 🔥 修正：不使用 resample，讓 position 的月營收稀疏 index 自然換股
         test_report = sim(
             position=test_position,
-            resample='D',  # 🔥 配合月營收稀疏 index
-            stop_loss=MAX_DRAWDOWN,  # 🔥 使用統一的最大回檔限制
+            stop_loss=params.get('stop_loss', 0.1),
+            trail_stop=params.get('trail_stop', 0.05),
             fee_ratio=FEE_RATIO,
             tax_ratio=TAX_RATIO,
             trade_at_price=params.get('trade_at_price', 'close'),
             position_limit=params.get('position_limit', 0.3),
+            take_profit=params.get('take_profit', 0.3),
             upload=False,
             name=f"快快龍_W{WINDOW_ID}_Gen{gen}_測試期"
         )
@@ -1399,13 +1403,16 @@ def evaluate_fitness(gene):
         # 🔥 應用 3% 持股約束
         position = position_weight_mgr.normalize_position(position)
 
-        # 🔥 修正：resample='D' 配合稀疏月營收 index = 月營收截止日換股
+        # 🔥 修正：不使用 resample，讓 position 的月營收稀疏 index 自然換股
         report = sim(
             position=position,
-            resample='D',  # 🔥 配合月營收稀疏 index
-            stop_loss=MAX_DRAWDOWN,  # 🔥 使用統一的最大回檔限制
+            stop_loss=params.get('stop_loss', 0.1),
+            trail_stop=params.get('trail_stop', 0.05),
             fee_ratio=FEE_RATIO,
             tax_ratio=TAX_RATIO,
+            trade_at_price=params.get('trade_at_price', 'close'),
+            position_limit=params.get('position_limit', 0.3),
+            take_profit=params.get('take_profit', 0.3),
             upload=False,
             name="Eval"
         )
