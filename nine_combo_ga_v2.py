@@ -6,7 +6,13 @@
 # =============================================================================
 
 #%% ========== 安裝套件 ==========
-!pip install finlab deap -q
+import subprocess
+import sys
+try:
+    import finlab
+    import deap
+except ImportError:
+    subprocess.check_call([sys.executable, "-m", "pip", "install", "finlab", "deap", "-q"])
 
 #%% ========== 環境變數與設定 ==========
 import os
