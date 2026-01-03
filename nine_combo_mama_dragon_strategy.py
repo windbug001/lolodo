@@ -782,76 +782,254 @@ strategy_engine = NineStrategyEngine(data_loader)
 # 第六部分：基因解碼器
 # =============================================================================
 class GeneDecoder:
-    """基因解碼器 - 九策略版本"""
+    """
+    基因解碼器 - 九策略完整版 (180個參數)
 
-    GENE_LENGTH = 50  # 擴展到50個參數
+    基因結構：
+    ┌─────────────────────────────────────────────────────────────────┐
+    │ 0-8     : 九策略權重 (9個)                                       │
+    │ 9-28    : 策略1 低波動本益比 (20個)                              │
+    │ 29-48   : 策略2 小資族 (20個)                                    │
+    │ 49-68   : 策略3 營收股價雙渦輪 (20個)                            │
+    │ 69-84   : 策略4 高殖利率烏龜 (16個)                              │
+    │ 85-100  : 策略5 低波動性指標 (16個)                              │
+    │ 101-116 : 策略6 藏獒外掛大盤指針 (16個)                          │
+    │ 117-136 : 策略7 小蝦米跟大鯨魚 (20個)                            │
+    │ 137-156 : 策略8 純技術趨勢 (20個)                                │
+    │ 157-173 : 策略9 財報指標20大 (17個)                              │
+    │ 174-179 : 回測與風控參數 (6個)                                   │
+    └─────────────────────────────────────────────────────────────────┘
+    總計：180 個可演化參數
+    """
+
+    GENE_LENGTH = 180  # 完整180個參數
 
     def decode(self, genes: List[float]) -> Dict[str, Any]:
-        """解碼基因"""
+        """解碼基因為策略參數"""
         if len(genes) < self.GENE_LENGTH:
             genes = list(genes) + [0.5] * (self.GENE_LENGTH - len(genes))
         genes = genes[:self.GENE_LENGTH]
 
         params = {}
 
-        # === 九策略權重 (0-8) ===
+        # =========================================================
+        # 九策略權重 (0-8) - 9個參數
+        # =========================================================
         raw_weights = [max(0.01, genes[i]) for i in range(9)]
         total = sum(raw_weights)
         for i in range(9):
             params[f'weight_{i+1}'] = raw_weights[i] / total
 
-        # === 策略1參數 (9-14) ===
-        params['rev_ma3_ma12_ratio'] = genes[9] * 0.5 + 1.0
-        params['rev_consistency'] = genes[10] * 0.4 + 0.5
-        params['volatility_threshold'] = genes[11] * 0.05 + 0.02
-        params['margin_usage_limit'] = genes[12] * 30 + 20
-        params['pe_min'] = genes[13] * 10 + 3
-        params['pe_max'] = genes[14] * 20 + 15
+        # =========================================================
+        # 策略1: 低波動本益比 (9-28) - 20個參數
+        # =========================================================
+        params['s1_rev_ma3_ma12_ratio'] = genes[9] * 0.5 + 1.0      # 1.0-1.5
+        params['s1_rev_consistency'] = genes[10] * 0.4 + 0.5        # 0.5-0.9
+        params['s1_volatility_threshold'] = genes[11] * 0.05 + 0.02 # 0.02-0.07
+        params['s1_margin_usage_limit'] = genes[12] * 30 + 20       # 20-50
+        params['s1_non_op_income_limit'] = genes[13] * 10 + 5       # 5-15
+        params['s1_pe_min'] = genes[14] * 10 + 3                    # 3-13
+        params['s1_pe_max'] = genes[15] * 20 + 15                   # 15-35
+        params['s1_pb_min'] = genes[16] * 1.5 + 0.5                 # 0.5-2.0
+        params['s1_pb_max'] = genes[17] * 2.0 + 2.0                 # 2.0-4.0
+        params['s1_min_gpm'] = genes[18] * 15 + 5                   # 5-20%
+        params['s1_gpm_sustain'] = int(genes[19] * 4 + 2)           # 2-6
+        params['s1_min_roe'] = genes[20] * 15 + 5                   # 5-20%
+        params['s1_roe_sustain'] = int(genes[21] * 4 + 2)           # 2-6
+        params['s1_inv_level_max'] = int(genes[22] * 4 + 6)         # 6-10
+        params['s1_inv_ratio_max'] = genes[23] * 20 + 35            # 35-55%
+        params['s1_ma_short'] = int(genes[24] * 30 + 40)            # 40-70
+        params['s1_ma_mid'] = int(genes[25] * 30 + 70)              # 70-100
+        params['s1_ma_long'] = int(genes[26] * 50 + 200)            # 200-250
+        params['s1_min_volume'] = genes[27] * 200000 + 100000       # 10萬-30萬
+        params['s1_top_n'] = int(genes[28] * 8 + 3)                 # 3-11
 
-        # === 策略2參數 (15-18) ===
-        params['market_value_limit'] = genes[15] * 20e9 + 5e9
-        params['market_rev_ratio_limit'] = genes[16] * 3 + 2
-        params['rsv_period'] = int(genes[17] * 30 + 40)
+        # =========================================================
+        # 策略2: 小資族 (29-48) - 20個參數
+        # =========================================================
+        params['s2_market_value_limit'] = genes[29] * 15e9 + 5e9    # 50億-200億
+        params['s2_market_rev_ratio_limit'] = genes[30] * 3 + 2     # 2-5
+        params['s2_rev_yoy_growth_limit'] = genes[31] * 15 - 20     # -20 to -5
+        params['s2_rev_mom_growth_limit'] = genes[32] * 40 - 60     # -60 to -20
+        params['s2_rsv_period'] = int(genes[33] * 40 + 30)          # 30-70
+        params['s2_ma_period'] = int(genes[34] * 50 + 40)           # 40-90
+        params['s2_volume_threshold'] = genes[35] * 200000 + 100000 # 10萬-30萬
+        params['s2_non_op_limit'] = genes[36] * 5 + 5               # 5-10
+        params['s2_min_free_cash'] = genes[37] * 10 - 5             # -5 to 5
+        params['s2_min_roe'] = genes[38] * 15 + 5                   # 5-20%
+        params['s2_min_op_growth'] = genes[39] * 30 - 10            # -10 to 20
+        params['s2_ma_short'] = int(genes[40] * 40 + 40)            # 40-80
+        params['s2_ma_mid'] = int(genes[41] * 40 + 100)             # 100-140
+        params['s2_sustain_period'] = int(genes[42] * 4 + 2)        # 2-6
+        params['s2_rev_bottom_window'] = int(genes[43] * 8 + 8)     # 8-16
+        params['s2_rev_bottom_ratio'] = genes[44] * 0.3 + 1.1       # 1.1-1.4
+        params['s2_rev_decline_threshold'] = genes[45] * 20 - 35    # -35 to -15
+        params['s2_old_trend_period'] = int(genes[46] * 6 + 10)     # 10-16
+        params['s2_old_trend_match'] = int(genes[47] * 4 + 6)       # 6-10
+        params['s2_top_n'] = int(genes[48] * 8 + 4)                 # 4-12
 
-        # === 策略3參數 (18-22) ===
-        params['rev_ma_period'] = int(genes[18] * 5 + 3)
-        params['rev_ma_lookback'] = int(genes[19] * 15 + 15)
-        params['price_high_window'] = int(genes[20] * 8 + 4)
-        params['rsi_threshold'] = genes[21] * 20 + 50
-        params['pe_limit'] = genes[22] * 100 + 100
+        # =========================================================
+        # 策略3: 營收股價雙渦輪 (49-68) - 20個參數
+        # =========================================================
+        params['s3_rev_ma_period'] = int(genes[49] * 5 + 3)         # 3-8
+        params['s3_rev_ma_lookback'] = int(genes[50] * 18 + 12)     # 12-30
+        params['s3_price_high_window'] = int(genes[51] * 10 + 5)    # 5-15
+        params['s3_min_volume'] = genes[52] * 300000 + 200000       # 20萬-50萬
+        params['s3_min_price'] = genes[53] * 20 + 10                # 10-30
+        params['s3_rsi_threshold'] = genes[54] * 20 + 50            # 50-70
+        params['s3_rsi_sustain'] = int(genes[55] * 3 + 1)           # 1-4
+        params['s3_pe_limit'] = genes[56] * 100 + 100               # 100-200
+        params['s3_min_gpm'] = genes[57] * 10 + 5                   # 5-15%
+        params['s3_gpm_sustain'] = int(genes[58] * 4 + 3)           # 3-7
+        params['s3_min_btpm'] = genes[59] * 6 + 2                   # 2-8%
+        params['s3_btpm_sustain'] = int(genes[60] * 2 + 1)          # 1-3
+        params['s3_min_atpm'] = genes[61] * 5 + 2                   # 2-7%
+        params['s3_atpm_sustain'] = int(genes[62] * 2 + 1)          # 1-3
+        params['s3_rev_growth_pct'] = genes[63] * 0.2 + 0.8         # 0.8-1.0
+        params['s3_boss_min_level'] = int(genes[64] * 3 + 10)       # 10-13
+        params['s3_boss_max_level'] = int(genes[65] * 3 + 14)       # 14-17
+        params['s3_boss_ratio'] = genes[66] * 15 + 15               # 15-30%
+        params['s3_performance_ma'] = int(genes[67] * 100 + 200)    # 200-300
+        params['s3_top_n'] = int(genes[68] * 12 + 6)                # 6-18
 
-        # === 策略4參數 (23-26) ===
-        params['min_yield_ratio'] = genes[23] * 4 + 3
-        params['min_op_earn_ratio'] = genes[24] * 10 + 5
-        params['min_boss_hold'] = genes[25] * 20 + 10
+        # =========================================================
+        # 策略4: 高殖利率烏龜 (69-84) - 16個參數
+        # =========================================================
+        params['s4_min_yield_ratio'] = genes[69] * 4 + 3            # 3-7%
+        params['s4_min_op_earn_ratio'] = genes[70] * 12 + 5         # 5-17%
+        params['s4_min_boss_hold'] = genes[71] * 25 + 10            # 10-35%
+        params['s4_min_volume'] = genes[72] * 150000 + 50000        # 5萬-20萬
+        params['s4_max_volume'] = genes[73] * 3000000 + 1000000     # 100萬-400萬
+        params['s4_sma_short'] = int(genes[74] * 15 + 10)           # 10-25
+        params['s4_sma_long'] = int(genes[75] * 40 + 40)            # 40-80
+        params['s4_rev_period'] = int(genes[76] * 4 + 2)            # 2-6
+        params['s4_rev_compare'] = int(genes[77] * 8 + 10)          # 10-18
+        params['s4_min_rev_growth'] = genes[78] * 20 - 10           # -10 to 10
+        params['s4_min_gpm'] = genes[79] * 10 + 5                   # 5-15%
+        params['s4_min_npm'] = genes[80] * 8 + 3                    # 3-11%
+        params['s4_pb_max'] = genes[81] * 2 + 2                     # 2-4
+        params['s4_pe_max'] = genes[82] * 15 + 15                   # 15-30
+        params['s4_sustain'] = int(genes[83] * 3 + 2)               # 2-5
+        params['s4_top_n'] = int(genes[84] * 8 + 5)                 # 5-13
 
-        # === 策略5參數 (26-28) ===
-        params['std_window'] = int(genes[26] * 20 + 10)
-        params['std_threshold'] = genes[27] * 0.3 + 0.2
+        # =========================================================
+        # 策略5: 低波動性指標 (85-100) - 16個參數
+        # =========================================================
+        params['s5_min_volume'] = genes[85] * 200000 + 100000       # 10萬-30萬
+        params['s5_std_window'] = int(genes[86] * 25 + 15)          # 15-40
+        params['s5_std_threshold'] = genes[87] * 0.3 + 0.2          # 0.2-0.5
+        params['s5_ma_short'] = int(genes[88] * 30 + 40)            # 40-70
+        params['s5_ma_mid'] = int(genes[89] * 40 + 100)             # 100-140
+        params['s5_ma_long'] = int(genes[90] * 50 + 200)            # 200-250
+        params['s5_beta_window'] = int(genes[91] * 40 + 60)         # 60-100
+        params['s5_beta_max'] = genes[92] * 0.5 + 0.5               # 0.5-1.0
+        params['s5_min_market_cap'] = genes[93] * 50e9 + 50e9       # 500億-1000億
+        params['s5_min_roe'] = genes[94] * 10 + 5                   # 5-15%
+        params['s5_min_npm'] = genes[95] * 8 + 3                    # 3-11%
+        params['s5_max_pe'] = genes[96] * 20 + 20                   # 20-40
+        params['s5_min_yield'] = genes[97] * 3 + 2                  # 2-5%
+        params['s5_volatility_pct'] = genes[98] * 0.3 + 0.2         # 0.2-0.5
+        params['s5_use_cap'] = genes[99] > 0.5                      # True/False
+        params['s5_top_n'] = int(genes[100] * 15 + 10)              # 10-25
 
-        # === 策略6參數 (28-30) ===
-        params['new_high_window'] = int(genes[28] * 140 + 60)
+        # =========================================================
+        # 策略6: 藏獒外掛大盤指針 (101-116) - 16個參數
+        # =========================================================
+        params['s6_new_high_window'] = int(genes[101] * 160 + 60)   # 60-220
+        params['s6_min_year_growth'] = genes[102] * 20 - 25         # -25 to -5
+        params['s6_max_year_growth'] = genes[103] * 40 + 50         # 50-90
+        params['s6_rev_bottom_ratio'] = genes[104] * 0.3 + 1.1      # 1.1-1.4
+        params['s6_min_month_growth'] = genes[105] * 15 - 20        # -20 to -5
+        params['s6_min_volume'] = genes[106] * 200000 + 100000      # 10萬-30萬
+        params['s6_sustain_period'] = int(genes[107] * 3 + 2)       # 2-5
+        params['s6_volume_ma_period'] = int(genes[108] * 10 + 5)    # 5-15
+        params['s6_rev_window'] = int(genes[109] * 8 + 8)           # 8-16
+        params['s6_decline_period'] = int(genes[110] * 3 + 2)       # 2-5
+        params['s6_old_period'] = int(genes[111] * 6 + 10)          # 10-16
+        params['s6_old_match'] = int(genes[112] * 4 + 6)            # 6-10
+        params['s6_ma_short'] = int(genes[113] * 30 + 40)           # 40-70
+        params['s6_ma_long'] = int(genes[114] * 60 + 100)           # 100-160
+        params['s6_use_smallest'] = genes[115] > 0.5                # True/False
+        params['s6_top_n'] = int(genes[116] * 12 + 8)               # 8-20
 
-        # === 策略7參數 (30-32) - 小蝦米跟大鯨魚 ===
-        # 使用預設參數
+        # =========================================================
+        # 策略7: 小蝦米跟大鯨魚 (117-136) - 20個參數
+        # =========================================================
+        params['s7_small_inv_max_level'] = int(genes[117] * 4 + 3)  # 3-7級
+        params['s7_big_inv_min_level'] = int(genes[118] * 3 + 9)    # 9-12級
+        params['s7_big_inv_max_level'] = int(genes[119] * 3 + 13)   # 13-16級
+        params['s7_ma_period'] = int(genes[120] * 150 + 200)        # 200-350
+        params['s7_rev_yoy_window'] = int(genes[121] * 4 + 10)      # 10-14
+        params['s7_rev_mom_window'] = int(genes[122] * 3 + 1)       # 1-4
+        params['s7_first_filter'] = int(genes[123] * 30 + 40)       # 40-70
+        params['s7_second_filter'] = int(genes[124] * 20 + 25)      # 25-45
+        params['s7_third_filter'] = int(genes[125] * 8 + 8)         # 8-16
+        params['s7_ratio_diff_period'] = int(genes[126] * 6 + 6)    # 6-12
+        params['s7_use_interest'] = genes[127] > 0.5                # True/False
+        params['s7_use_grow'] = genes[128] > 0.5                    # True/False
+        params['s7_grow_threshold'] = genes[129] * 30 - 10          # -10 to 20
+        params['s7_interest_threshold'] = genes[130] * 4 + 2        # 2-6%
+        params['s7_ratio_weight'] = genes[131] * 0.5 + 0.3          # 0.3-0.8
+        params['s7_rev_weight'] = genes[132] * 0.5 + 0.3            # 0.3-0.8
+        params['s7_mom_weight'] = genes[133] * 0.5 + 0.2            # 0.2-0.7
+        params['s7_min_volume'] = genes[134] * 200000 + 100000      # 10萬-30萬
+        params['s7_resample'] = 'M' if genes[135] > 0.5 else None   # M or None
+        params['s7_top_n'] = int(genes[136] * 5 + 3)                # 3-8
 
-        # === 策略8參數 (32-38) - 純技術趨勢 ===
-        params['bias_sma_threshold'] = genes[32] * 0.15 + 0.05
-        params['bias_zlma_threshold'] = genes[33] * 0.15 + 0.05
-        params['bias_wma_threshold'] = genes[34] * 0.15 + 0.05
-        params['slope_percentile'] = genes[35] * 0.3 + 0.4
-        params['kurtosis_percentile'] = genes[36] * 0.3 + 0.3
+        # =========================================================
+        # 策略8: 純技術趨勢 (137-156) - 20個參數
+        # =========================================================
+        params['s8_bias_sma_period'] = int(genes[137] * 100 + 200)  # 200-300
+        params['s8_bias_sma_threshold'] = genes[138] * 0.15 + 0.05  # 0.05-0.20
+        params['s8_zlma_period'] = int(genes[139] * 60 + 90)        # 90-150
+        params['s8_bias_zlma_threshold'] = genes[140] * 0.15 + 0.05 # 0.05-0.20
+        params['s8_wma_period'] = int(genes[141] * 40 + 40)         # 40-80
+        params['s8_bias_wma_threshold'] = genes[142] * 0.15 + 0.05  # 0.05-0.20
+        params['s8_slope_period'] = int(genes[143] * 40 + 40)       # 40-80
+        params['s8_slope_percentile'] = genes[144] * 0.3 + 0.4      # 0.4-0.7
+        params['s8_kurtosis_period'] = int(genes[145] * 100 + 150)  # 150-250
+        params['s8_kurtosis_percentile'] = genes[146] * 0.3 + 0.3   # 0.3-0.6
+        params['s8_skew_period'] = int(genes[147] * 80 + 120)       # 120-200
+        params['s8_skew_threshold'] = genes[148] * 1.0 - 0.5        # -0.5 to 0.5
+        params['s8_min_volume'] = genes[149] * 200000 + 150000      # 15萬-35萬
+        params['s8_vol_ma_period'] = int(genes[150] * 10 + 5)       # 5-15
+        params['s8_use_smallest'] = genes[151] > 0.5                # True/False
+        params['s8_ma_confirm'] = genes[152] > 0.5                  # True/False
+        params['s8_ma_short'] = int(genes[153] * 20 + 10)           # 10-30
+        params['s8_ma_long'] = int(genes[154] * 40 + 40)            # 40-80
+        params['s8_resample'] = 'Q' if genes[155] > 0.5 else None   # Q or None
+        params['s8_top_n'] = int(genes[156] * 10 + 8)               # 8-18
 
-        # === 策略9參數 (38-40) - 財報指標20大 ===
-        # 使用預設參數
+        # =========================================================
+        # 策略9: 財報指標20大 (157-173) - 17個參數
+        # =========================================================
+        params['s9_std_window'] = int(genes[157] * 40 + 40)         # 40-80
+        params['s9_ma_period'] = int(genes[158] * 40 + 40)          # 40-80
+        params['s9_std_percentile'] = genes[159] * 0.3 + 0.3        # 0.3-0.6
+        params['s9_min_volume'] = genes[160] * 200000 + 150000      # 15萬-35萬
+        params['s9_cond1_weight'] = genes[161] * 8 + 2              # 2-10
+        params['s9_cond2_weight'] = genes[162] * 8 + 2              # 2-10
+        params['s9_cond3_weight'] = genes[163] * 12 + 5             # 5-17
+        params['s9_use_roe'] = genes[164] > 0.5                     # True/False
+        params['s9_use_npm'] = genes[165] > 0.5                     # True/False
+        params['s9_use_growth'] = genes[166] > 0.5                  # True/False
+        params['s9_use_liquidity'] = genes[167] > 0.5               # True/False
+        params['s9_use_leverage'] = genes[168] > 0.5                # True/False
+        params['s9_feature_count'] = int(genes[169] * 10 + 10)      # 10-20
+        params['s9_deadline_shift'] = int(genes[170] * 3)           # 0-3
+        params['s9_rank_method'] = 'pct' if genes[171] > 0.5 else 'dense'
+        params['s9_resample'] = 'W' if genes[172] < 0.5 else 'M'    # W or M
+        params['s9_top_n'] = int(genes[173] * 12 + 10)              # 10-22
 
-        # === 各策略 top_n (40-48) ===
-        params['top_n'] = int(genes[40] * 5 + 5)  # 通用
-
-        # === 回測參數 (48-50) ===
-        params['stop_loss'] = genes[48] * 0.2 + 0.15
-        params['position_limit'] = genes[49] * 0.2 + 0.25
-        params['min_volume'] = genes[40] * 200000 + 100000
+        # =========================================================
+        # 回測與風控參數 (174-179) - 6個參數
+        # =========================================================
+        params['stop_loss'] = genes[174] * 0.15 + 0.15              # 15%-30%
+        params['trail_stop'] = genes[175] * 0.20 + 0.20             # 20%-40%
+        params['take_profit'] = genes[176] * 0.40 + 0.50            # 50%-90%
+        params['position_limit'] = genes[177] * 0.15 + 0.25         # 25%-40%
+        params['min_volume'] = genes[178] * 200000 + 100000         # 10萬-30萬
+        params['liquidity_days'] = int(genes[179] * 15 + 10)        # 10-25天
 
         return params
 
