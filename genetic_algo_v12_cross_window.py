@@ -1179,6 +1179,138 @@ def safe_condition(cond):
         return cond * 0
 
 # =============================================================================
+# 🔄 基因格式偵測與轉換 (v12.6 新增)
+# =============================================================================
+def detect_gene_format(gene):
+    """
+    偵測基因格式：[0,1] 縮放格式 或 原始 unbounded 格式
+
+    Returns:
+        'scaled': [0,1] 格式
+        'unbounded': 原始格式
+    """
+    if not gene or len(gene) < 10:
+        return 'unknown'
+
+    # 檢查前50個基因值
+    sample = gene[:min(50, len(gene))]
+
+    # 計算超出 [0,1] 範圍的比例
+    out_of_range = sum(1 for g in sample if g < 0 or g > 1)
+    ratio = out_of_range / len(sample)
+
+    # 如果超過 30% 的值不在 [0,1] 範圍，判定為 unbounded
+    if ratio > 0.3:
+        return 'unbounded'
+    return 'scaled'
+
+def normalize_gene_to_scaled(gene):
+    """
+    將 unbounded 基因轉換為 [0,1] 縮放格式
+
+    根據備份程式的 init_gene_X() 函數推算原始範圍，
+    然後反向轉換為 [0,1]
+    """
+    if not isinstance(gene, list):
+        gene = list(gene)
+
+    # 確保長度足夠
+    while len(gene) < 160:
+        gene.append(0.5)
+
+    # 定義各基因的原始範圍 (min, max) - 根據備份程式的 init_gene_X()
+    # 格式: gene_index: (min_val, max_val)
+    gene_ranges = {
+        # 策略權重 (0-5): 0~1 本身就是 scaled
+        # 策略1: 低波動本益比
+        6: (0.8, 1.8),      # rev_ma3_ma12_ratio
+        7: (0.6, 1.2),      # rev_consistency
+        8: (10, 150),       # volatility_threshold * 1000
+        9: (10, 45),        # margin_usage_limit
+        10: (2, 15),        # non_op_income_limit
+        11: (30, 350),      # min_volume
+        12: (3, 10),        # pe_min
+        13: (20, 40),       # pe_max
+        14: (2, 12),        # top_n
+
+        # 策略2: 小資族
+        15: (5e9, 30e9),    # market_value_limit
+        16: (1, 5),         # market_rev_ratio_limit
+        17: (3, 25),        # rev_yoy_growth_limit (負數用)
+        18: (35, 80),       # rev_mom_growth_limit (負數用)
+        19: (30, 100),      # rsv_period
+        20: (35, 180),      # ma_period
+        21: (50, 450),      # volume_threshold
+        22: (2, 12),        # top_n
+
+        # 策略3: 營收股價雙渦輪
+        23: (1, 8),         # rev_ma_period
+        24: (9, 36),        # rev_ma_lookback
+        25: (2, 20),        # price_high_window
+        26: (100, 600),     # min_volume
+        27: (5, 35),        # min_price
+        28: (30, 80),       # rsi_threshold
+        29: (120, 350),     # pe_limit
+        30: (2, 12),        # top_n
+
+        # 策略4: 高殖利率烏龜
+        31: (5, 8),         # min_yield_ratio
+        32: (3, 10),        # min_op_earn_ratio
+        33: (10, 30),       # min_boss_hold
+        34: (50, 500),      # min_volume
+        35: (5000, 15000),  # max_volume
+        36: (2, 12),        # top_n
+
+        # 策略5: 低波動性指標
+        37: (200, 800),     # min_volume
+        38: (40, 80),       # std_window
+        39: (0.4, 0.8),     # std_threshold
+        40: (3, 12),        # top_n
+
+        # 策略6: 藏獒外掛大盤指針
+        43: (200, 300),     # new_high_window
+        44: (10, 20),       # min_year_growth (負數用)
+        45: (50, 80),       # max_year_growth
+        46: (0.6, 0.9),     # rev_bottom_ratio
+        47: (30, 50),       # min_month_growth (負數用)
+        48: (200, 500),     # min_volume
+        49: (1, 12),        # top_n
+
+        # 總體參數
+        51: (0.15, 0.60),   # stop_loss
+        52: (0.15, 0.50),   # trail_stop
+        53: (0.30, 1.00),   # take_profit
+        54: (0.10, 1.00),   # position_limit
+        56: (3e6, 35e6),    # liquidity_threshold
+    }
+
+    normalized = gene.copy()
+
+    for idx, (min_val, max_val) in gene_ranges.items():
+        if idx < len(gene):
+            raw_val = gene[idx]
+            # 反向計算: normalized = (raw - min) / (max - min)
+            range_size = max_val - min_val
+            if range_size > 0:
+                norm_val = (raw_val - min_val) / range_size
+                # 限制在 [0, 1] 範圍
+                normalized[idx] = max(0.0, min(1.0, norm_val))
+
+    return normalized
+
+def auto_convert_gene(gene):
+    """
+    自動偵測並轉換基因格式
+    """
+    format_type = detect_gene_format(gene)
+
+    if format_type == 'unbounded':
+        print(f"   🔄 偵測到 unbounded 格式，自動轉換為 [0,1] 格式")
+        return normalize_gene_to_scaled(gene)
+
+    return gene
+
+# =============================================================================
 # gene_to_params (v12.6 - 參考備份程式修正參數範圍)
 # =============================================================================
 def gene_to_params(gene):
@@ -2657,8 +2789,11 @@ def evaluate_historical_top20():
         print(f"\n🧬 評估第 {i}/20 個基因 (原始夏普: {original_sharpe:.4f})...")
 
         try:
+            # 🔄 自動偵測並轉換基因格式
+            converted_genes = auto_convert_gene(genes)
+
             # 執行樣本外測試
-            oos_result = run_oos_test(genes, name=f"歷史最佳_{i}")
+            oos_result = run_oos_test(converted_genes, name=f"歷史最佳_{i}")
 
             if oos_result:
                 result_entry = {
