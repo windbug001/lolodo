@@ -132,8 +132,7 @@ MAX_DRAWDOWN = 0.17          # 🔥 最大回檔 17%
 TARGET_ANNUAL_RETURN = 0.4   # 年化報酬 40%
 
 # 🔥 持股配比約束
-MIN_POSITION_WEIGHT = 0.03   # 最小持股 3%
-POSITION_WEIGHT_STEP = 0.03  # 持股必須是 3% 倍數
+MIN_POSITION_WEIGHT = 0.03   # 每隻至少 3%（不需要 3% 倍數疊加，3.5%, 4.2% 都可以）
 
 # 🔄 自適應持股設定
 ADAPTIVE_POSITION = True     # 啟用自適應持股
@@ -362,7 +361,7 @@ safe_file_mgr = SafeFileManager()
 print("✅ 安全檔案管理器已初始化")
 
 # =============================================================================
-# 持股配比管理器（3% 倍數約束）
+# 持股配比管理器（每隻至少 3%）
 # =============================================================================
 class PositionWeightManager:
     """
@@ -370,26 +369,27 @@ class PositionWeightManager:
 
     功能：
     1. 確保每隻股票至少 3%
-    2. 確保持股是 3% 倍數（3%, 6%, 9%, 12%...）
-    3. 低於 3% 的直接設為 0%
+    2. 低於 3% 的直接移除
+    3. 最多持有 33 隻股票
+    4. 不需要 3% 倍數疊加（3.5%, 4.2% 都可以）
     """
 
     @staticmethod
     def normalize_position(position_df) -> 'pd.DataFrame':
         """
-        正規化持股比例
+        正規化持股比例，確保每隻至少 3%
 
         規則：
-        1. 每行獨立處理
-        2. 低於 3% 的設為 0
-        3. 剩餘的正規化並量化為 3% 倍數
+        1. 低於 3% 的股票直接移除
+        2. 不需要 3% 倍數（3.5%, 4.2% 都可以）
+        3. 最多持有 33 隻股票
         """
         if position_df is None or position_df.empty:
             return position_df
 
         try:
-            # 確保是數值型
             result = position_df.astype(float).copy()
+            max_stocks = int(1.0 / MIN_POSITION_WEIGHT)  # 33 隻
 
             for idx in result.index:
                 row = result.loc[idx].copy()
@@ -401,31 +401,48 @@ class PositionWeightManager:
                 # 正規化
                 normalized = row / row_sum
 
-                # 過濾低於 3% 的
-                filtered = normalized.where(normalized >= MIN_POSITION_WEIGHT, 0.0)
+                # 🔥 迭代過濾：確保最終每隻都 >= 3%
+                for _ in range(10):
+                    filtered = normalized[normalized >= MIN_POSITION_WEIGHT]
 
-                # 重新正規化剩餘的
-                filtered_sum = filtered.sum()
-                if filtered_sum > 0:
-                    filtered = filtered / filtered_sum
+                    if filtered.empty:
+                        filtered = normalized[normalized > 0].nlargest(min(len(normalized[normalized > 0]), max_stocks))
 
-                    # 量化為 3% 倍數
-                    quantized = (filtered / POSITION_WEIGHT_STEP).round() * POSITION_WEIGHT_STEP
+                    if filtered.empty or filtered.sum() == 0:
+                        break
 
-                    # 調整總和為 1
-                    total = quantized.sum()
-                    if total > 0 and abs(total - 1.0) > 0.01:
-                        max_col = quantized.idxmax()
-                        quantized.loc[max_col] += (1.0 - total)
+                    filtered = filtered / filtered.sum()
 
-                    result.loc[idx] = quantized.values
-                else:
+                    if (filtered >= MIN_POSITION_WEIGHT - 0.001).all():
+                        break
+
+                    normalized = filtered
+
+                if filtered.empty or filtered.sum() == 0:
                     result.loc[idx] = 0.0
+                    continue
+
+                # 限制最多 33 隻
+                if len(filtered) > max_stocks:
+                    filtered = filtered.nlargest(max_stocks)
+                    filtered = filtered / filtered.sum()
+
+                # 最終正規化
+                final_weights = filtered / filtered.sum()
+                final_weights = final_weights[final_weights >= MIN_POSITION_WEIGHT - 0.001]
+
+                if final_weights.sum() > 0 and abs(final_weights.sum() - 1.0) > 0.001:
+                    final_weights = final_weights / final_weights.sum()
+
+                # 填入結果
+                new_row = pd.Series(0.0, index=row.index)
+                for stock in final_weights.index:
+                    new_row[stock] = final_weights[stock]
+                result.loc[idx] = new_row.values
 
             return result.astype(float)
 
         except Exception as e:
-            # 如果處理失敗，返回原始 DataFrame
             print(f"   ⚠️ 持股正規化失敗: {e}")
             return position_df
 
@@ -1808,10 +1825,19 @@ def strategy_market(params):
         return pd.DataFrame(0.0, index=close.index, columns=close.columns)
 
 # =============================================================================
-# 持股配比正規化
+# 持股配比正規化（確保每隻至少 3%，不需要倍數疊加）
 # =============================================================================
 def normalize_weights(position_df):
+    """
+    正規化持股比例，確保每隻股票至少 3%
+
+    規則：
+    1. 低於 3% 的股票直接移除
+    2. 不需要 3% 倍數（3.5%, 4.2% 都可以）
+    3. 最多持有 33 隻股票 (100% / 3%)
+    """
     result = pd.DataFrame(0.0, index=position_df.index, columns=position_df.columns)
+    max_stocks = int(1.0 / MIN_POSITION_WEIGHT)  # 33 隻
 
     for date in position_df.index:
         row = position_df.loc[date]
@@ -1819,27 +1845,49 @@ def normalize_weights(position_df):
         if total == 0:
             continue
 
+        # 正規化
         normalized = row / total
-        filtered = normalized[normalized >= MIN_POSITION_WEIGHT]
 
-        if filtered.empty:
-            max_stocks = int(1.0 / MIN_POSITION_WEIGHT)
-            filtered = normalized.nlargest(min(len(normalized), max_stocks))
-            if filtered.sum() > 0:
-                filtered = filtered / filtered.sum()
+        # 🔥 迭代過濾：確保最終每隻都 >= 3%
+        for _ in range(10):  # 最多迭代10次
+            filtered = normalized[normalized >= MIN_POSITION_WEIGHT]
 
-        if filtered.sum() == 0:
+            if filtered.empty:
+                # 如果全部 < 3%，取前 N 大的
+                filtered = normalized.nlargest(min(len(normalized[normalized > 0]), max_stocks))
+
+            if filtered.empty or filtered.sum() == 0:
+                break
+
+            # 重新正規化
+            filtered = filtered / filtered.sum()
+
+            # 檢查是否所有股票都 >= 3%
+            if (filtered >= MIN_POSITION_WEIGHT - 0.001).all():
+                break
+
+            # 更新 normalized 為 filtered（移除小的）
+            normalized = filtered
+
+        if filtered.empty or filtered.sum() == 0:
             continue
 
-        filtered = filtered / filtered.sum()
-        quantized = (filtered / POSITION_WEIGHT_STEP).round() * POSITION_WEIGHT_STEP
+        # 限制最多 33 隻股票
+        if len(filtered) > max_stocks:
+            filtered = filtered.nlargest(max_stocks)
+            filtered = filtered / filtered.sum()
 
-        diff = 1.0 - quantized.sum()
-        if abs(diff) > 0.001 and len(quantized) > 0:
-            quantized[quantized.idxmax()] += diff
+        # 🔥 最終正規化到 100%（不需要量化為 3% 倍數）
+        final_weights = filtered / filtered.sum()
 
-        quantized = quantized[quantized >= MIN_POSITION_WEIGHT - 0.001]
-        result.loc[date, quantized.index] = quantized
+        # 🔥 最終檢查：確保每隻 >= 3%
+        final_weights = final_weights[final_weights >= MIN_POSITION_WEIGHT - 0.001]
+
+        # 如果過濾後有變化，再次正規化
+        if final_weights.sum() > 0 and abs(final_weights.sum() - 1.0) > 0.001:
+            final_weights = final_weights / final_weights.sum()
+
+        result.loc[date, final_weights.index] = final_weights
 
     return result
 
