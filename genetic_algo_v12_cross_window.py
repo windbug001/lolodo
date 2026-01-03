@@ -2375,10 +2375,14 @@ def load_historical_elites(top_n=20):
 # =============================================================================
 # 🔧 基因清理函數（防止複數/NaN值導致錯誤）
 # =============================================================================
-def sanitize_gene(gene):
+def sanitize_gene(gene, bounded=False):
     """
-    清理基因值，確保都是有效的浮點數 [0, 1]
+    清理基因值，確保都是有效的浮點數
     修復 TypeError: '>' not supported between 'float' and 'complex'
+
+    Args:
+        gene: 基因列表
+        bounded: 是否限制在 [0, 1] 範圍（預設 False，使用 unbounded 格式）
     """
     sanitized = []
     for val in gene:
@@ -2390,11 +2394,12 @@ def sanitize_gene(gene):
             val = float(val)
             # 處理 NaN 和 Inf
             if np.isnan(val) or np.isinf(val):
-                val = random.random()
-            # 限制在 [0, 1] 範圍
-            val = max(0.0, min(1.0, val))
+                val = random.uniform(0, 100)  # unbounded 格式用更大範圍
+            # 只有在 bounded 模式才限制範圍
+            if bounded:
+                val = max(0.0, min(1.0, val))
         except:
-            val = random.random()
+            val = random.uniform(0, 100)
         sanitized.append(val)
     return sanitized
 
@@ -3020,7 +3025,9 @@ def seed_evolution_from_stable_genes(n_generations=50, mutation_boost=1.5):
     print(f"\n💉 注入 {n_inject} 個穩定種子...")
 
     for i, stable in enumerate(stable_genes[:n_inject]):
-        new_ind = creator.Individual(stable['genes'])
+        # 🔧 清理基因值（防止複數/NaN導致錯誤）
+        clean_gene = sanitize_gene(stable['genes'])
+        new_ind = creator.Individual(clean_gene)
         population[i] = new_ind
 
     # 評估初始族群
