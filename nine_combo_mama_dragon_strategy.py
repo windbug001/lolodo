@@ -332,7 +332,7 @@ class NineStrategyEngine:
     # 策略 1：低波動本益比策略
     # =========================================================================
     def strategy_1_low_volatility_pe(self, params: Dict) -> Any:
-        """策略一：低波動本益比"""
+        """策略一：低波動本益比 (20個參數: s1_*)"""
         close = self.dl.get('close')
         pe = self.dl.get('pe')
         pb = self.dl.get('pb')
@@ -353,32 +353,40 @@ class NineStrategyEngine:
 
         peg = pe / 營業利益成長率
 
-        cond1 = rev_ma3 / rev_ma12 > params.get('rev_ma3_ma12_ratio', 1.0)
-        cond2 = rev / rev.shift(1) > params.get('rev_consistency', 0.8)
+        # 使用 s1_ 前綴參數
+        cond1 = rev_ma3 / rev_ma12 > params.get('s1_rev_ma3_ma12_ratio', 1.0)
+        cond2 = rev / rev.shift(1) > params.get('s1_rev_consistency', 0.8)
 
-        tree_select_factor = ((融資使用率 <= params.get('margin_usage_limit', 40))
-                             & (entry_volatility <= params.get('volatility_threshold', 0.04))
-                             & (業外收支營收率 < params.get('non_op_income_limit', 10)))
+        tree_select_factor = ((融資使用率 <= params.get('s1_margin_usage_limit', 40))
+                             & (entry_volatility <= params.get('s1_volatility_threshold', 0.04))
+                             & (業外收支營收率 < params.get('s1_non_op_income_limit', 10)))
 
-        condition_成交量 = vol.average(1) > params.get('min_volume', 100000)
+        condition_成交量 = vol.average(1) > params.get('s1_min_volume', 100000)
         cond排除月營收連3月衰退 = ~(rev_yoy_growth < -30).sustain(3)
         cond排除月營收成長趨勢過老 = ~(rev_yoy_growth > 30).sustain(12, 8)
         cond單月營收月增率 = (rev_month_growth > -54).sustain(3)
-        cond收盤價大於均線 = (close > close.average(75)) & (close > close.average(40)) & (close > close.average(90))
+
+        # 使用可調整的均線參數
+        ma_short = int(params.get('s1_ma_short', 40))
+        ma_mid = int(params.get('s1_ma_mid', 75))
+        ma_long = int(params.get('s1_ma_long', 200))
+        cond收盤價大於均線 = (close > close.average(ma_short)) & (close > close.average(ma_mid)) & (close > close.average(ma_long))
         cond近三個月營收大於年營收 = rev.average(4) > rev.average(12)
 
-        pe_range = (params.get('pe_min', 5) <= pe) & (pe <= params.get('pe_max', 25))
-        pb_range = (0.5 <= pb) & (pb <= 2.8)
-        gpm_trend = (營業毛利率 > 8).sustain(2)
-        roe_trend = (ROE綜合損益 > 0).sustain(2)
+        pe_range = (params.get('s1_pe_min', 5) <= pe) & (pe <= params.get('s1_pe_max', 25))
+        pb_range = (params.get('s1_pb_min', 0.5) <= pb) & (pb <= params.get('s1_pb_max', 2.8))
+        gpm_trend = (營業毛利率 > params.get('s1_min_gpm', 8)).sustain(int(params.get('s1_gpm_sustain', 2)))
+        roe_trend = (ROE綜合損益 > params.get('s1_min_roe', 0)).sustain(int(params.get('s1_roe_sustain', 2)))
 
         try:
-            small_inv_under50 = (inventory[(inventory.持股分級.astype(int) <= 8)]
+            inv_level_max = int(params.get('s1_inv_level_max', 8))
+            inv_ratio_max = params.get('s1_inv_ratio_max', 46)
+            small_inv_under50 = (inventory[(inventory.持股分級.astype(int) <= inv_level_max)]
                             .reset_index()
                             .groupby(["date", "stock_id"])
                             .agg({"占集保庫存數比例": "sum"})
                             .reset_index()
-                            .pivot(index="date", columns="stock_id", values="占集保庫存數比例")) <= 46
+                            .pivot(index="date", columns="stock_id", values="占集保庫存數比例")) <= inv_ratio_max
         except:
             small_inv_under50 = True
 
@@ -387,7 +395,7 @@ class NineStrategyEngine:
                    & cond單月營收月增率 & ~limit_up_all_day & condition_成交量
                    & gpm_trend & roe_trend & small_inv_under50 & pe_range & pb_range)
 
-        position = peg[cond_all & (peg > 0)].is_smallest(params.get('top_n', 5))
+        position = peg[cond_all & (peg > 0)].is_smallest(int(params.get('s1_top_n', 5)))
         position = position.reindex(rev.index_str_to_date().index, method='ffill')
         return position
 
@@ -395,7 +403,7 @@ class NineStrategyEngine:
     # 策略 2：小資族策略
     # =========================================================================
     def strategy_2_small_investor(self, params: Dict) -> Any:
-        """策略二：小資族"""
+        """策略二：小資族 (20個參數: s2_*)"""
         close = self.dl.get('close')
         vol = self.dl.get('vol')
         rev = self.dl.get('rev')
@@ -409,27 +417,41 @@ class NineStrategyEngine:
         業外收支營收率 = self.dl.get('業外收支營收率')
         當月營收 = data.get('monthly_revenue:當月營收') * 1000
 
-        condition1 = (市值 < params.get('market_value_limit', 15e9))
-        condition2 = 自由現金流 > 0
-        condition3 = 股東權益報酬率 > 0
-        condition4 = 營業利益成長率 > -1
-        condition5 = 市值營收比 < params.get('market_rev_ratio_limit', 3)
-        condition6 = vol > params.get('volume_threshold', 100000)
+        # 使用 s2_ 前綴參數
+        condition1 = (市值 < params.get('s2_market_value_limit', 15e9))
+        condition2 = 自由現金流 > params.get('s2_min_free_cash', 0)
+        condition3 = 股東權益報酬率 > params.get('s2_min_roe', 0)
+        condition4 = 營業利益成長率 > params.get('s2_min_op_growth', -1)
+        condition5 = 市值營收比 < params.get('s2_market_rev_ratio_limit', 3)
+        condition6 = vol > params.get('s2_volume_threshold', 100000)
 
-        cond排除月營收連3月衰退 = ~(rev_yoy_growth < -10).sustain(3)
-        cond排除月營收成長趨勢過老 = ~(rev_yoy_growth > 60).sustain(12, 8)
-        cond單月營收月增率 = (rev_month_growth > -54).sustain(3)
-        cond收盤價大於均線 = (close > close.average(60)) & (close > close.average(120)) & (close > close.average(75))
-        cond近三個月營收大於年營收 = rev.average(3) > rev.average(12)
-        業外收支營收率占比低 = (業外收支營收率 < 7.3)
+        # 使用可調整的衰退門檻
+        rev_decline = params.get('s2_rev_decline_threshold', -10)
+        sustain_period = int(params.get('s2_sustain_period', 3))
+        old_period = int(params.get('s2_old_trend_period', 12))
+        old_match = int(params.get('s2_old_trend_match', 8))
 
-        rsv_period = params.get('rsv_period', 50)
+        cond排除月營收連3月衰退 = ~(rev_yoy_growth < rev_decline).sustain(sustain_period)
+        cond排除月營收成長趨勢過老 = ~(rev_yoy_growth > 60).sustain(old_period, old_match)
+        cond單月營收月增率 = (rev_month_growth > params.get('s2_rev_mom_growth_limit', -54)).sustain(sustain_period)
+
+        # 使用可調整的均線參數
+        ma_short = int(params.get('s2_ma_short', 60))
+        ma_mid = int(params.get('s2_ma_mid', 120))
+        cond收盤價大於均線 = (close > close.average(ma_short)) & (close > close.average(ma_mid)) & (close > close.average(75))
+
+        # 營收比較 (使用可調整窗口)
+        rev_bottom_window = int(params.get('s2_rev_bottom_window', 12))
+        cond近三個月營收大於年營收 = rev.average(3) > rev.average(rev_bottom_window)
+        業外收支營收率占比低 = (業外收支營收率 < params.get('s2_non_op_limit', 7.3))
+
+        rsv_period = int(params.get('s2_rsv_period', 50))
         rsv = (close - close.rolling(rsv_period).min()) / (close.rolling(rsv_period).max() - close.rolling(rsv_period).min())
 
         position = ((condition1 & condition2 & condition3 & condition4 & condition5
                     & condition6 & cond排除月營收成長趨勢過老 & cond單月營收月增率
                     & cond排除月營收連3月衰退 & cond近三個月營收大於年營收
-                    & 業外收支營收率占比低) * rsv).is_largest(params.get('top_n', 6))
+                    & 業外收支營收率占比低) * rsv).is_largest(int(params.get('s2_top_n', 6)))
 
         position = position.reindex(當月營收.index_str_to_date().index)
         return position
@@ -438,7 +460,7 @@ class NineStrategyEngine:
     # 策略 3：營收股價雙渦輪策略
     # =========================================================================
     def strategy_3_revenue_price_turbo(self, params: Dict) -> Any:
-        """策略三：營收股價雙渦輪"""
+        """策略三：營收股價雙渦輪 (20個參數: s3_*)"""
         close = self.dl.get('close')
         vol = self.dl.get('vol')
         pe = self.dl.get('pe')
@@ -452,46 +474,62 @@ class NineStrategyEngine:
         limit_up_all_day = self.dl.get('limit_up_all_day')
         inventory = self.dl.get('inventory')
 
-        rev_ma_period = params.get('rev_ma_period', 4)
+        # 使用 s3_ 前綴參數
+        rev_ma_period = int(params.get('s3_rev_ma_period', 4))
         rev_ma = rev.average(rev_ma_period)
-        rev_ma_lookback = params.get('rev_ma_lookback', 20)
+        rev_ma_lookback = int(params.get('s3_rev_ma_lookback', 20))
 
         condition_近n月平均營收創新高 = rev_ma == rev_ma.rolling(rev_ma_lookback, min_periods=rev_ma_period).max()
-        condition_近n日內有1日股價創新高 = (close == close.rolling(260).max()).sustain(params.get('price_high_window', 8), 1)
-        condition_成交量 = vol.average(1) > params.get('min_volume', 200000)
+        price_high_window = int(params.get('s3_price_high_window', 8))
+        condition_近n日內有1日股價創新高 = (close == close.rolling(260).max()).sustain(price_high_window, 1)
+        condition_成交量 = vol.average(1) > params.get('s3_min_volume', 200000)
 
         long_ma_pattern = ((close > close.average(5)) & (close > close.average(10))
                           & (close > close.average(20)) & (close > close.average(60))
                           & (close > close.average(150)) & (close > close.average(200)))
 
-        收盤價_超級績效 = close > (close.average(250) * 1.1)
-        rsi_higt_trend = (rsi > params.get('rsi_threshold', 60)).sustain(1)
-        gpm_trend = (營業毛利率 > 5).sustain(5)
-        btpm_trend = (稅前淨利率 > 4).sustain(1)
-        atpm_trend = (稅後淨利率 > 3).sustain(1)
-        rev_rise_nsatisfy = rev_yoy_growth.rank(pct=True, axis=1) > 0.9
+        performance_ma = int(params.get('s3_performance_ma', 250))
+        收盤價_超級績效 = close > (close.average(performance_ma) * 1.1)
+
+        rsi_sustain = int(params.get('s3_rsi_sustain', 1))
+        rsi_higt_trend = (rsi > params.get('s3_rsi_threshold', 60)).sustain(rsi_sustain)
+
+        gpm_sustain = int(params.get('s3_gpm_sustain', 5))
+        gpm_trend = (營業毛利率 > params.get('s3_min_gpm', 5)).sustain(gpm_sustain)
+
+        btpm_sustain = int(params.get('s3_btpm_sustain', 1))
+        btpm_trend = (稅前淨利率 > params.get('s3_min_btpm', 4)).sustain(btpm_sustain)
+
+        atpm_sustain = int(params.get('s3_atpm_sustain', 1))
+        atpm_trend = (稅後淨利率 > params.get('s3_min_atpm', 3)).sustain(atpm_sustain)
+
+        rev_growth_pct = params.get('s3_rev_growth_pct', 0.9)
+        rev_rise_nsatisfy = rev_yoy_growth.rank(pct=True, axis=1) > rev_growth_pct
 
         try:
-            boss_inventory_over400 = (inventory[(inventory.持股分級.astype(int) >= 12) & (inventory.持股分級.astype(int) <= 16)]
+            boss_min_level = int(params.get('s3_boss_min_level', 12))
+            boss_max_level = int(params.get('s3_boss_max_level', 16))
+            boss_ratio = params.get('s3_boss_ratio', 18)
+            boss_inventory_over400 = (inventory[(inventory.持股分級.astype(int) >= boss_min_level) & (inventory.持股分級.astype(int) <= boss_max_level)]
                             .reset_index()
                             .groupby(["date", "stock_id"])
                             .agg({"占集保庫存數比例": "sum"})
                             .reset_index()
-                            .pivot(index="date", columns="stock_id", values="占集保庫存數比例")) >= 18
+                            .pivot(index="date", columns="stock_id", values="占集保庫存數比例")) >= boss_ratio
         except:
             boss_inventory_over400 = True
 
-        pe_range = ~(params.get('pe_limit', 150) <= pe)
+        pe_range = ~(params.get('s3_pe_limit', 150) <= pe)
 
         conditions = (condition_近n月平均營收創新高 & condition_近n日內有1日股價創新高
                      & condition_成交量 & long_ma_pattern & gpm_trend & btpm_trend
-                     & atpm_trend & rev_rise_nsatisfy & (close > params.get('min_price', 15))
+                     & atpm_trend & rev_rise_nsatisfy & (close > params.get('s3_min_price', 15))
                      & (業外收支營收率 < 7.3) & pe_range & 收盤價_超級績效
                      & ((vol >= vol.rolling(20).mean() * 0.8)) & rsi_higt_trend
                      & boss_inventory_over400 & ~limit_up_all_day)
 
         position = rev_yoy_growth * conditions
-        position = position[position > 0].is_largest(params.get('top_n', 12))
+        position = position[position > 0].is_largest(int(params.get('s3_top_n', 12)))
         position = position.reindex(rev.index_str_to_date().index, method="ffill")
         return position
 
@@ -499,28 +537,48 @@ class NineStrategyEngine:
     # 策略 4：高殖利率烏龜策略
     # =========================================================================
     def strategy_4_high_yield_turtle(self, params: Dict) -> Any:
-        """策略四：高殖利率烏龜"""
+        """策略四：高殖利率烏龜 (16個參數: s4_*)"""
         yield_ratio = self.dl.get('dividend_yield')
         close = self.dl.get('close')
         vol = self.dl.get('vol')
         rev = self.dl.get('rev')
         營業利益率 = self.dl.get('營業利益率')
+        營業毛利率 = self.dl.get('營業毛利率')
+        稅後淨利率 = self.dl.get('稅後淨利率')
+        pb = self.dl.get('pb')
+        pe = self.dl.get('pe')
         董監持有股數占比 = self.dl.get('董監持有股數占比')
         rev_yoy_growth = self.dl.get('rev_yoy_growth')
 
-        sma20 = close.average(20)
-        sma60 = close.average(60)
+        # 使用 s4_ 前綴參數
+        sma_short = int(params.get('s4_sma_short', 20))
+        sma_long = int(params.get('s4_sma_long', 60))
+        sma20 = close.average(sma_short)
+        sma60 = close.average(sma_long)
 
-        cond1 = yield_ratio >= params.get('min_yield_ratio', 4)
+        cond1 = yield_ratio >= params.get('s4_min_yield_ratio', 4)
         cond2 = (close > sma20) & (close > sma60)
-        cond3 = rev.average(3) > rev.average(12)
-        cond4 = 營業利益率 >= params.get('min_op_earn_ratio', 8)
-        cond5 = 董監持有股數占比 >= params.get('min_boss_hold', 15)
-        cond6 = (vol.average(5) >= params.get('min_volume', 100000)) & (vol.average(5) <= params.get('max_volume', 3000000))
 
-        cond_all = cond1 & cond2 & cond3 & cond4 & cond5 & cond6
+        rev_period = int(params.get('s4_rev_period', 3))
+        rev_compare = int(params.get('s4_rev_compare', 12))
+        cond3 = rev.average(rev_period) > rev.average(rev_compare)
+
+        cond4 = 營業利益率 >= params.get('s4_min_op_earn_ratio', 8)
+        cond5 = 董監持有股數占比 >= params.get('s4_min_boss_hold', 15)
+        cond6 = (vol.average(5) >= params.get('s4_min_volume', 100000)) & (vol.average(5) <= params.get('s4_max_volume', 3000000))
+
+        # 額外財務條件
+        cond7 = 營業毛利率 >= params.get('s4_min_gpm', 5)
+        cond8 = 稅後淨利率 >= params.get('s4_min_npm', 3)
+        cond9 = pb <= params.get('s4_pb_max', 4)
+        cond10 = pe <= params.get('s4_pe_max', 30)
+
+        sustain = int(params.get('s4_sustain', 2))
+        rev_growth_cond = (rev_yoy_growth > params.get('s4_min_rev_growth', -10)).sustain(sustain)
+
+        cond_all = cond1 & cond2 & cond3 & cond4 & cond5 & cond6 & cond7 & cond8 & cond9 & cond10 & rev_growth_cond
         cond_all = cond_all * rev_yoy_growth
-        position = cond_all[cond_all > 0].is_largest(params.get('top_n', 8))
+        position = cond_all[cond_all > 0].is_largest(int(params.get('s4_top_n', 8)))
         position = position.reindex(rev.index_str_to_date().index, method='ffill')
         return position
 
@@ -528,20 +586,52 @@ class NineStrategyEngine:
     # 策略 5：低波動性指標策略
     # =========================================================================
     def strategy_5_low_volatility_index(self, params: Dict) -> Any:
-        """策略五：低波動性指標"""
+        """策略五：低波動性指標 (16個參數: s5_*)"""
         cap = self.dl.get('市值')
         vol = self.dl.get('vol')
         close = self.dl.get('close')
+        ROE綜合損益 = self.dl.get('ROE綜合損益')
+        稅後淨利率 = self.dl.get('稅後淨利率')
+        pe = self.dl.get('pe')
+        dividend_yield = self.dl.get('dividend_yield')
 
-        std_window = params.get('std_window', 20)
+        # 使用 s5_ 前綴參數
+        std_window = int(params.get('s5_std_window', 20))
         std = close.pct_change().rolling(std_window).std().rank(axis=1, pct=True)
 
-        position = cap[(vol.average(20) > params.get('min_volume', 100000)) &
-                       (close > close.average(60)) &
-                       (close > close.average(120)) &
-                       (close > close.average(250)) &
-                       (std < params.get('std_threshold', 0.3))].is_smallest(params.get('top_n', 15))
+        # 均線參數
+        ma_short = int(params.get('s5_ma_short', 60))
+        ma_mid = int(params.get('s5_ma_mid', 120))
+        ma_long = int(params.get('s5_ma_long', 250))
 
+        # Beta 計算
+        beta_window = int(params.get('s5_beta_window', 60))
+        market_return = close.mean(axis=1).pct_change()
+        stock_return = close.pct_change()
+        beta_cond = True  # 簡化處理
+
+        # 基本面條件
+        use_cap = params.get('s5_use_cap', True)
+        if use_cap:
+            cap_cond = cap > params.get('s5_min_market_cap', 50e9)
+        else:
+            cap_cond = True
+
+        roe_cond = ROE綜合損益 > params.get('s5_min_roe', 5) if ROE綜合損益 is not None else True
+        npm_cond = 稅後淨利率 > params.get('s5_min_npm', 3) if 稅後淨利率 is not None else True
+        pe_cond = pe < params.get('s5_max_pe', 40) if pe is not None else True
+        yield_cond = dividend_yield > params.get('s5_min_yield', 2) if dividend_yield is not None else True
+
+        volatility_pct = params.get('s5_volatility_pct', 0.3)
+
+        position = cap[(vol.average(20) > params.get('s5_min_volume', 100000)) &
+                       (close > close.average(ma_short)) &
+                       (close > close.average(ma_mid)) &
+                       (close > close.average(ma_long)) &
+                       (std < params.get('s5_std_threshold', volatility_pct)) &
+                       cap_cond & roe_cond & npm_cond & pe_cond & yield_cond]
+
+        position = position.is_smallest(int(params.get('s5_top_n', 15)))
         position = position.reindex(close.index, method='ffill')
         return position
 
@@ -549,27 +639,58 @@ class NineStrategyEngine:
     # 策略 6：藏獒外掛大盤指針策略
     # =========================================================================
     def strategy_6_market_indicator(self, params: Dict) -> Any:
-        """策略六：藏獒外掛大盤指針"""
+        """策略六：藏獒外掛大盤指針 (16個參數: s6_*)"""
         close = self.dl.get('close')
         vol = self.dl.get('vol')
         rev = self.dl.get('rev')
         rev_yoy_growth = self.dl.get('rev_yoy_growth')
         rev_month_growth = self.dl.get('rev_month_growth')
 
-        vol_ma = vol.average(10)
-        new_high_window = params.get('new_high_window', 120)
+        # 使用 s6_ 前綴參數
+        vol_ma_period = int(params.get('s6_volume_ma_period', 10))
+        vol_ma = vol.average(vol_ma_period)
+        new_high_window = int(params.get('s6_new_high_window', 120))
 
         cond1 = (close == close.rolling(new_high_window).max())
-        cond2 = ~(rev_yoy_growth < -15).sustain(3)
-        cond3 = ~(rev_yoy_growth > 60).sustain(12, 8)
-        cond4 = ((rev.rolling(12).min())/(rev) < 1.2).sustain(3)
-        cond5 = (rev_month_growth > -10).sustain(3)
-        cond6 = vol_ma > params.get('min_volume', 100000)
 
-        buy = cond1 & cond2 & cond3 & cond4 & cond5 & cond6
+        # 營收衰退排除
+        min_year_growth = params.get('s6_min_year_growth', -15)
+        decline_period = int(params.get('s6_decline_period', 3))
+        cond2 = ~(rev_yoy_growth < min_year_growth).sustain(decline_period)
+
+        # 營收成長趨勢過老排除
+        max_year_growth = params.get('s6_max_year_growth', 60)
+        old_period = int(params.get('s6_old_period', 12))
+        old_match = int(params.get('s6_old_match', 8))
+        cond3 = ~(rev_yoy_growth > max_year_growth).sustain(old_period, old_match)
+
+        # 營收底部反轉
+        rev_window = int(params.get('s6_rev_window', 12))
+        rev_bottom_ratio = params.get('s6_rev_bottom_ratio', 1.2)
+        sustain_period = int(params.get('s6_sustain_period', 3))
+        cond4 = ((rev.rolling(rev_window).min())/(rev) < rev_bottom_ratio).sustain(sustain_period)
+
+        # 月營收成長
+        min_month_growth = params.get('s6_min_month_growth', -10)
+        cond5 = (rev_month_growth > min_month_growth).sustain(sustain_period)
+        cond6 = vol_ma > params.get('s6_min_volume', 100000)
+
+        # 均線條件 (可選)
+        ma_short = int(params.get('s6_ma_short', 60))
+        ma_long = int(params.get('s6_ma_long', 120))
+        cond7 = (close > close.average(ma_short)) & (close > close.average(ma_long))
+
+        buy = cond1 & cond2 & cond3 & cond4 & cond5 & cond6 & cond7
         buy = vol_ma * buy
         buy = buy[buy > 0]
-        buy = buy.is_smallest(params.get('top_n', 10))
+
+        # 選擇最小或最大
+        use_smallest = params.get('s6_use_smallest', True)
+        if use_smallest:
+            buy = buy.is_smallest(int(params.get('s6_top_n', 10)))
+        else:
+            buy = buy.is_largest(int(params.get('s6_top_n', 10)))
+
         position = buy.reindex(rev.index_str_to_date().index, method='ffill')
         return position
 
@@ -577,41 +698,80 @@ class NineStrategyEngine:
     # 策略 7：小蝦米跟大鯨魚 (新增)
     # =========================================================================
     def strategy_7_shrimp_whale(self, params: Dict) -> Any:
-        """策略七：小蝦米跟大鯨魚 - 籌碼面策略"""
+        """策略七：小蝦米跟大鯨魚 - 籌碼面策略 (20個參數: s7_*)"""
         inv = self.dl.get('inventory')
         rev = self.dl.get('rev')
         close = self.dl.get('close')
+        vol = self.dl.get('vol')
         interest = self.dl.get('dividend_yield')
         grow = self.dl.get('營業利益成長率')
 
-        # 散戶持股 (1-5級)
-        h1 = inv[inv.持股分級.astype(int) <= 5].reset_index().groupby(['date', 'stock_id']).agg({'持有股數': 'sum'}).reset_index().pivot(index='date', columns='stock_id', values='持有股數')
+        # 使用 s7_ 前綴參數
+        small_inv_max_level = int(params.get('s7_small_inv_max_level', 5))
+        big_inv_min_level = int(params.get('s7_big_inv_min_level', 9))
+        big_inv_max_level = int(params.get('s7_big_inv_max_level', 15))
 
-        # 大戶持股 (9-15級)
-        h2 = inv[(inv.持股分級.astype(int) >= 9) & (inv.持股分級.astype(int) <= 15)].reset_index().groupby(['date', 'stock_id']).agg({'持有股數': 'sum'}).reset_index().pivot(index='date', columns='stock_id', values='持有股數')
+        # 散戶持股
+        h1 = inv[inv.持股分級.astype(int) <= small_inv_max_level].reset_index().groupby(['date', 'stock_id']).agg({'持有股數': 'sum'}).reset_index().pivot(index='date', columns='stock_id', values='持有股數')
+
+        # 大戶持股
+        h2 = inv[(inv.持股分級.astype(int) >= big_inv_min_level) & (inv.持股分級.astype(int) <= big_inv_max_level)].reset_index().groupby(['date', 'stock_id']).agg({'持有股數': 'sum'}).reset_index().pivot(index='date', columns='stock_id', values='持有股數')
 
         # 大戶持股比例
         ratio = (h2 / (h1 + h2))
 
         # 營收指標
-        rev_mom = rev / rev.shift()
-        rev_yoy2 = rev.rolling(2).mean() / rev.shift(12).rolling(2).mean()
+        ma_period = int(params.get('s7_ma_period', 250))
+        rev_yoy_window = int(params.get('s7_rev_yoy_window', 12))
+        rev_mom_window = int(params.get('s7_rev_mom_window', 1))
+
+        rev_mom = rev / rev.shift(rev_mom_window)
+        rev_yoy2 = rev.rolling(2).mean() / rev.shift(rev_yoy_window).rolling(2).mean()
+
+        # 權重設定
+        ratio_weight = params.get('s7_ratio_weight', 1.0)
+        rev_weight = params.get('s7_rev_weight', 1.0)
+        mom_weight = params.get('s7_mom_weight', 1.0)
 
         # 多階段篩選
-        # 第一層：50檔
-        p = (FinlabDataFrame(ratio).rank(axis=1, pct=True) *
-             (close.notna() & (close > close.average(250)))
-             + rev_yoy2.rank(axis=1, pct=True)
-             + rev_mom.rank(axis=1, pct=True)).is_largest(50)
+        first_filter = int(params.get('s7_first_filter', 50))
+        second_filter = int(params.get('s7_second_filter', 35))
+        third_filter = int(params.get('s7_third_filter', 10))
 
-        # 第二層：35檔 (營收成長)
-        p = (p * grow).is_largest(35)
+        # 第一層
+        p = (FinlabDataFrame(ratio).rank(axis=1, pct=True) * ratio_weight *
+             (close.notna() & (close > close.average(ma_period)))
+             + rev_yoy2.rank(axis=1, pct=True) * rev_weight
+             + rev_mom.rank(axis=1, pct=True) * mom_weight).is_largest(first_filter)
 
-        # 第三層：10檔 (殖利率)
-        p = (p * interest).is_largest(10)
+        # 第二層：營收成長 (可選)
+        use_grow = params.get('s7_use_grow', True)
+        if use_grow:
+            grow_threshold = params.get('s7_grow_threshold', -100)
+            p = (p * (grow > grow_threshold) * grow).is_largest(second_filter)
+        else:
+            p = p.is_largest(second_filter)
 
-        # 第四層：5檔 (大戶增持)
-        p = (p * ratio.diff(8)).is_largest(params.get('top_n', 5))
+        # 第三層：殖利率 (可選)
+        use_interest = params.get('s7_use_interest', True)
+        if use_interest:
+            interest_threshold = params.get('s7_interest_threshold', 0)
+            p = (p * (interest > interest_threshold) * interest).is_largest(third_filter)
+        else:
+            p = p.is_largest(third_filter)
+
+        # 第四層：大戶增持
+        ratio_diff_period = int(params.get('s7_ratio_diff_period', 8))
+        p = (p * ratio.diff(ratio_diff_period)).is_largest(int(params.get('s7_top_n', 5)))
+
+        # 成交量過濾
+        vol_cond = vol.average(5) > params.get('s7_min_volume', 100000)
+        p = p * vol_cond
+
+        # Resample (可選)
+        resample = params.get('s7_resample', None)
+        if resample:
+            p = p.resample(resample).last()
 
         p = p.reindex(rev.index_str_to_date().index, method='ffill')
         return p
@@ -620,9 +780,17 @@ class NineStrategyEngine:
     # 策略 8：純技術趨勢策略 (新增)
     # =========================================================================
     def strategy_8_tech_trend(self, params: Dict) -> Any:
-        """策略八：純技術趨勢策略"""
+        """策略八：純技術趨勢策略 (20個參數: s8_*)"""
         close = self.dl.get('close')
         vol = self.dl.get('vol')
+
+        # 使用 s8_ 前綴參數
+        wma_period = int(params.get('s8_wma_period', 60))
+        zlma_period = int(params.get('s8_zlma_period', 120))
+        bias_sma_period = int(params.get('s8_bias_sma_period', 250))
+        slope_period = int(params.get('s8_slope_period', 60))
+        kurtosis_period = int(params.get('s8_kurtosis_period', 250))
+        skew_period = int(params.get('s8_skew_period', 180))
 
         def wma(price, n):
             return price.ewm(com=n).mean()
@@ -633,22 +801,48 @@ class NineStrategyEngine:
             return wma(series, n)
 
         # 計算技術指標
-        bias_sma_250 = close / close.rolling(250).mean() - 1
-        bias_zlma_120 = close / close.apply(lambda s: zlma(s, 120)) - 1
-        bias_wma_60 = close / close.apply(lambda s: wma(s, 60)) - 1
-        slope1_sma_60 = close.rolling(60).mean().pipe(lambda df: df / df.shift(60) - 1)
-        kurtosis_250 = close.pct_change().rolling(250).kurt()
-        kurtosis_120 = close.pct_change().rolling(120).kurt()
+        bias_sma = close / close.rolling(bias_sma_period).mean() - 1
+        bias_zlma = close / close.apply(lambda s: zlma(s, zlma_period)) - 1
+        bias_wma = close / close.apply(lambda s: wma(s, wma_period)) - 1
+        slope1_sma = close.rolling(slope_period).mean().pipe(lambda df: df / df.shift(slope_period) - 1)
+        kurtosis = close.pct_change().rolling(kurtosis_period).kurt()
+        skewness = close.pct_change().rolling(skew_period).skew()
+
+        # 均線確認 (可選)
+        ma_confirm = params.get('s8_ma_confirm', True)
+        if ma_confirm:
+            ma_short = int(params.get('s8_ma_short', 20))
+            ma_long = int(params.get('s8_ma_long', 60))
+            ma_cond = (close > close.average(ma_short)) & (close > close.average(ma_long))
+        else:
+            ma_cond = True
+
+        # 成交量均線
+        vol_ma_period = int(params.get('s8_vol_ma_period', 10))
 
         # 條件篩選
-        pos = vol.average(10)[
-            (bias_sma_250 > params.get('bias_sma_threshold', 0.1)) &
-            (bias_zlma_120 > params.get('bias_zlma_threshold', 0.1)) &
-            (bias_wma_60 > params.get('bias_wma_threshold', 0.1)) &
-            (slope1_sma_60.rank(axis=1, pct=True) > params.get('slope_percentile', 0.5)) &
-            (kurtosis_250.rank(axis=1, pct=True) > params.get('kurtosis_percentile', 0.4)) &
-            (vol > params.get('min_volume', 200000))
-        ].is_smallest(params.get('top_n', 10))
+        pos = vol.average(vol_ma_period)[
+            (bias_sma > params.get('s8_bias_sma_threshold', 0.1)) &
+            (bias_zlma > params.get('s8_bias_zlma_threshold', 0.1)) &
+            (bias_wma > params.get('s8_bias_wma_threshold', 0.1)) &
+            (slope1_sma.rank(axis=1, pct=True) > params.get('s8_slope_percentile', 0.5)) &
+            (kurtosis.rank(axis=1, pct=True) > params.get('s8_kurtosis_percentile', 0.4)) &
+            (skewness < params.get('s8_skew_threshold', 0)) &
+            (vol > params.get('s8_min_volume', 200000)) &
+            ma_cond
+        ]
+
+        # 選擇最小或最大
+        use_smallest = params.get('s8_use_smallest', True)
+        if use_smallest:
+            pos = pos.is_smallest(int(params.get('s8_top_n', 10)))
+        else:
+            pos = pos.is_largest(int(params.get('s8_top_n', 10)))
+
+        # Resample (可選)
+        resample = params.get('s8_resample', None)
+        if resample:
+            pos = pos.resample(resample).last()
 
         return pos
 
@@ -656,13 +850,23 @@ class NineStrategyEngine:
     # 策略 9：財報指標20大 (新增)
     # =========================================================================
     def strategy_9_fundamental_20(self, params: Dict) -> Any:
-        """策略九：財報指標20大"""
+        """策略九：財報指標20大 (17個參數: s9_*)"""
         close = self.dl.get('close')
         vol = self.dl.get('vol')
         fundamental_features = self.dl.get('fundamental_features')
+        ROE綜合損益 = self.dl.get('ROE綜合損益')
+        稅後淨利率 = self.dl.get('稅後淨利率')
 
         if not fundamental_features:
             return pd.DataFrame()
+
+        # 使用 s9_ 前綴參數
+        std_window = int(params.get('s9_std_window', 60))
+        ma_period = int(params.get('s9_ma_period', 60))
+        std_percentile = params.get('s9_std_percentile', 0.5)
+        feature_count = int(params.get('s9_feature_count', 20))
+        deadline_shift = int(params.get('s9_deadline_shift', 0))
+        rank_method = params.get('s9_rank_method', 'pct')
 
         class Process():
             @staticmethod
@@ -692,9 +896,27 @@ class NineStrategyEngine:
 
         # 處理財報特徵
         fs = []
-        for key, df in fundamental_features.items():
+        use_roe = params.get('s9_use_roe', True)
+        use_npm = params.get('s9_use_npm', True)
+        use_growth = params.get('s9_use_growth', True)
+        use_liquidity = params.get('s9_use_liquidity', True)
+        use_leverage = params.get('s9_use_leverage', True)
+
+        for key, df in list(fundamental_features.items())[:feature_count]:
             if df is not None:
                 try:
+                    # 根據參數決定是否使用某類特徵
+                    if 'ROE' in key and not use_roe:
+                        continue
+                    if '淨利率' in key and not use_npm:
+                        continue
+                    if '成長率' in key and not use_growth:
+                        continue
+                    if '流動' in key and not use_liquidity:
+                        continue
+                    if '負債' in key and not use_leverage:
+                        continue
+
                     # 選擇處理方法
                     if '成長率' in key:
                         processed = Process.l_avg4(df)
@@ -712,16 +934,31 @@ class NineStrategyEngine:
             return pd.DataFrame()
 
         # 波動率條件
-        std = close.pct_change().rolling(60).std()
-        cond1 = (close > close.average(60)).astype(float) * 5
-        cond2 = (std.rank(pct=True, axis=1) < 0.5).astype(float) * 5
-        cond3 = (vol.rolling(5).mean() > params.get('min_volume', 200000)).astype(float) * 10
+        std = close.pct_change().rolling(std_window).std()
+
+        cond1_weight = params.get('s9_cond1_weight', 5)
+        cond2_weight = params.get('s9_cond2_weight', 5)
+        cond3_weight = params.get('s9_cond3_weight', 10)
+
+        cond1 = (close > close.average(ma_period)).astype(float) * cond1_weight
+        cond2 = (std.rank(pct=True, axis=1) < std_percentile).astype(float) * cond2_weight
+        cond3 = (vol.rolling(5).mean() > params.get('s9_min_volume', 200000)).astype(float) * cond3_weight
 
         # 綜合評分
-        score = sum([f.deadline().rank(axis=1, pct=True).fillna(0) for f in fs])
+        if rank_method == 'pct':
+            score = sum([f.deadline(deadline_shift).rank(axis=1, pct=True).fillna(0) for f in fs])
+        else:
+            score = sum([f.deadline(deadline_shift).rank(axis=1, method='dense').fillna(0) for f in fs])
+
         final_score = score + (cond1 + cond2 + cond3).reindex(score.index, method='ffill')
 
-        position = final_score.is_largest(params.get('top_n', 15))
+        position = final_score.is_largest(int(params.get('s9_top_n', 15)))
+
+        # Resample (可選)
+        resample = params.get('s9_resample', None)
+        if resample:
+            position = position.resample(resample).last()
+
         position = position.reindex(close.loc[score.index[0]:].index, method='ffill')
 
         return position
