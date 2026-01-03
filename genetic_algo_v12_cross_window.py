@@ -2796,27 +2796,31 @@ def evaluate_historical_top20():
             oos_result = run_oos_test(converted_genes, name=f"歷史最佳_{i}")
 
             if oos_result:
+                # 🔧 修正：正確存取 train/test 結構
+                train_sharpe = oos_result['train']['sharpe']
+                test_sharpe = oos_result['test']['sharpe']
+
                 result_entry = {
                     'rank': i,
                     'original_sharpe': original_sharpe,
-                    'train_sharpe': oos_result['train_sharpe'],
-                    'test_sharpe': oos_result['test_sharpe'],
+                    'train_sharpe': train_sharpe,
+                    'test_sharpe': test_sharpe,
                     'sharpe_ratio': oos_result['sharpe_ratio'],
                     'is_overfit': oos_result['is_overfit'],
-                    'genes': genes
+                    'genes': converted_genes  # 使用轉換後的基因
                 }
                 results.append(result_entry)
 
                 # 更新歷史前20的訓練期/測試期資訊
                 historical_top20_mgr.update(
-                    genes=genes,
+                    genes=converted_genes,
                     sharpe=original_sharpe,
-                    train_sharpe=oos_result['train_sharpe'],
-                    test_sharpe=oos_result['test_sharpe']
+                    train_sharpe=train_sharpe,
+                    test_sharpe=test_sharpe
                 )
 
                 status = "🟢 穩定" if not oos_result['is_overfit'] else "🔴 過擬合"
-                print(f"   結果: 訓練 {oos_result['train_sharpe']:.3f} / 測試 {oos_result['test_sharpe']:.3f} = {oos_result['sharpe_ratio']*100:.1f}% {status}")
+                print(f"   結果: 訓練 {train_sharpe:.3f} / 測試 {test_sharpe:.3f} = {oos_result['sharpe_ratio']*100:.1f}% {status}")
             else:
                 print(f"   ⚠️ 評估失敗")
 
