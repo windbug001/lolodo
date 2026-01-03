@@ -71,17 +71,22 @@ pd.set_option('future.no_silent_downcasting', True)
 WINDOW_ID = 1
 FINLAB_API_KEY = "YOUR_API_KEY_HERE"  # 請替換成您的 API Key
 
-# 優化目標
-TARGET_SHARPE = 4.0
-MIN_CAPACITY = 10_000_000  # 1000萬
-TARGET_ANNUAL_RETURN = 0.3
-MAX_DRAWDOWN = 0.2
+# 🎯 優化目標（依用戶需求設定）
+TARGET_SHARPE = 4.2          # 目標夏普值 >= 4.2
+MIN_CAPACITY = 10_000_000    # 最少胃納量 1000萬台幣
+TARGET_ANNUAL_RETURN = 0.35  # 目標年化報酬 35%
+MAX_DRAWDOWN = 0.20          # 最大回檔 -20%
+MIN_POSITION_RATIO = 0.03    # 每股占比至少 3%
 
 # GA 演化參數
 POPULATION_SIZE = 60
 N_GENERATIONS = 150
 MUTATION_RATE = 0.2
 CROSSOVER_RATE = 0.8
+
+# 🔥 完整回測與斷點設定
+FULL_BACKTEST_INTERVAL = 5   # 每 5 代進行完整回測
+CHECKPOINT_INTERVAL = 5      # 每 5 代保存斷點
 
 # 回測設定
 BACKTEST_START = '2017-01-01'
@@ -855,8 +860,16 @@ gene_decoder = GeneDecoder()
 # =============================================================================
 # 第七部分：回測引擎
 # =============================================================================
-def run_backtest(position, params: Dict, name: str = "九組合媽媽龍") -> Dict:
-    """執行回測"""
+def run_backtest(position, params: Dict, name: str = "九組合媽媽龍", full_report: bool = False) -> Dict:
+    """
+    執行回測
+
+    Args:
+        position: 持股部位
+        params: 策略參數
+        name: 策略名稱
+        full_report: 是否輸出完整報告
+    """
     try:
         if position is None or position.empty:
             return {'sharpe': 0, 'capacity': 0, 'annual_return': 0, 'max_drawdown': 1}
@@ -869,7 +882,7 @@ def run_backtest(position, params: Dict, name: str = "九組合媽媽龍") -> Di
             fee_ratio=1.425 / 1000,
             tax_ratio=3 / 1000,
             trade_at_price="high_low_avg",
-            position_limit=params.get('position_limit', 0.35),
+            position_limit=MIN_POSITION_RATIO,  # 每股占比至少 3%
             stop_loss=params.get('stop_loss', 0.25),
             stop_trading_next_period=False,
             upload=False,
@@ -878,7 +891,7 @@ def run_backtest(position, params: Dict, name: str = "九組合媽媽龍") -> Di
 
         metrics = report.get_metrics()
 
-        return {
+        result = {
             'sharpe': metrics['ratio'].get('sharpeRatio', 0) or 0,
             'annual_return': metrics['profitability'].get('annualReturn', 0) or 0,
             'max_drawdown': abs(metrics['risk'].get('maxDrawdown', 1)),
@@ -886,6 +899,26 @@ def run_backtest(position, params: Dict, name: str = "九組合媽媽龍") -> Di
             'win_rate': metrics['profitability'].get('winRate', 0) or 0,
             'report': report,
         }
+
+        # 檢查是否達標
+        result['meets_sharpe'] = result['sharpe'] >= TARGET_SHARPE
+        result['meets_capacity'] = result['capacity'] >= MIN_CAPACITY
+        result['meets_drawdown'] = result['max_drawdown'] <= MAX_DRAWDOWN
+        result['meets_all'] = result['meets_sharpe'] and result['meets_capacity'] and result['meets_drawdown']
+
+        if full_report:
+            print(f"\n{'='*60}")
+            print(f"📊 完整回測報告 - {name}")
+            print(f"{'='*60}")
+            print(f"   夏普值: {result['sharpe']:.2f} {'✅' if result['meets_sharpe'] else '❌'} (目標 >= {TARGET_SHARPE})")
+            print(f"   胃納量: {result['capacity']/1e4:.0f}萬 {'✅' if result['meets_capacity'] else '❌'} (目標 >= {MIN_CAPACITY/1e4:.0f}萬)")
+            print(f"   最大回撤: {result['max_drawdown']*100:.1f}% {'✅' if result['meets_drawdown'] else '❌'} (目標 <= {MAX_DRAWDOWN*100:.0f}%)")
+            print(f"   年化報酬: {result['annual_return']*100:.1f}%")
+            print(f"   勝率: {result['win_rate']*100:.1f}%")
+            if result['meets_all']:
+                print(f"   🎉 全部達標！")
+
+        return result
     except Exception as e:
         print(f"   ⚠️ 回測失敗: {e}")
         return {'sharpe': 0, 'capacity': 0, 'annual_return': 0, 'max_drawdown': 1}
@@ -1016,22 +1049,548 @@ def run_live_backtest():
             print(f"   回測失敗: {e}")
 
 # =============================================================================
-# 主程式入口
+# 第十部分：DEAP NSGA-II 基因演算法設定
 # =============================================================================
-if __name__ == "__main__":
+
+# 清除舊定義（避免重複執行時出錯）
+if 'FitnessMulti' in dir(creator):
+    del creator.FitnessMulti
+if 'Individual' in dir(creator):
+    del creator.Individual
+
+# 創建適應度類別（4目標：綜合分數、夏普值、胃納量、穩健性）
+creator.create("FitnessMulti", base.Fitness, weights=(1.0, 1.0, 1.0, 1.0))
+creator.create("Individual", list, fitness=creator.FitnessMulti)
+
+toolbox = base.Toolbox()
+toolbox.register("attr_float", random.random)
+toolbox.register("individual", tools.initRepeat, creator.Individual,
+                 toolbox.attr_float, n=GeneDecoder.GENE_LENGTH)
+toolbox.register("population", tools.initRepeat, list, toolbox.individual)
+toolbox.register("mate", tools.cxSimulatedBinaryBounded, low=0.0, up=1.0, eta=20.0)
+toolbox.register("mutate", tools.mutPolynomialBounded, low=0.0, up=1.0, eta=20.0, indpb=0.05)
+toolbox.register("select", tools.selNSGA2)
+
+print("✅ DEAP NSGA-II 配置完成")
+
+# =============================================================================
+# 第十一部分：適應度評估函數
+# =============================================================================
+def evaluate_fitness(individual: List[float]) -> Tuple[float, float, float, float]:
+    """
+    評估個體適應度 (多目標)
+
+    Returns: (composite_score, sharpe_score, capacity_score, robustness_score)
+    """
+    try:
+        # 解碼基因
+        params = gene_decoder.decode(individual)
+
+        # 組合策略
+        position = strategy_engine.combine_all_strategies(params)
+
+        if position is None or position.empty:
+            return (0.0, 0.0, 0.0, -10.0)
+
+        # 執行回測
+        result = run_backtest(position, params, "GA評估")
+
+        sharpe = result.get('sharpe', 0)
+        capacity = result.get('capacity', 0)
+        annual_return = result.get('annual_return', 0)
+        max_drawdown = result.get('max_drawdown', 1)
+
+        # 夏普值分數（0-5）
+        sharpe_score = min(5.0, max(0, sharpe / TARGET_SHARPE * 5.0))
+
+        # 胃納量分數（0-5）
+        capacity_score = min(5.0, max(0, capacity / MIN_CAPACITY * 5.0))
+
+        # 年化報酬分數（0-2）
+        return_score = min(2.0, max(0, annual_return / TARGET_ANNUAL_RETURN * 2.0))
+
+        # 回撤懲罰
+        drawdown_penalty = 0 if max_drawdown <= MAX_DRAWDOWN else -(max_drawdown - MAX_DRAWDOWN) * 5
+
+        # 穩健性分數
+        robustness_score = return_score + drawdown_penalty
+
+        # 綜合分數
+        composite = sharpe_score * 0.4 + capacity_score * 0.3 + return_score * 0.2 + max(0, robustness_score) * 0.1
+
+        return (composite, sharpe_score, capacity_score, robustness_score)
+
+    except Exception as e:
+        print(f"   ⚠️ 評估失敗: {e}")
+        return (0.0, 0.0, 0.0, -10.0)
+
+toolbox.register("evaluate", evaluate_fitness)
+
+# =============================================================================
+# 第十二部分：Pareto Archive 持續演進管理器
+# =============================================================================
+class ParetoArchiveManager:
+    """Pareto 前緣歷史管理器 - 支援持續演進"""
+
+    def __init__(self, archive_file: str = None):
+        self.archive_file = archive_file or f"{BASE_DIR}/pareto_archive_9combo.pkl"
+        self.archive = []
+        self._load()
+
+    def _load(self):
+        """載入歷史精英"""
+        if os.path.exists(self.archive_file):
+            try:
+                with open(self.archive_file, 'rb') as f:
+                    data = pickle.load(f)
+                    self.archive = data.get('individuals', [])
+                print(f"✅ 載入 {len(self.archive)} 個歷史精英")
+            except Exception as e:
+                print(f"⚠️ 歷史載入失敗: {e}")
+                self.archive = []
+        else:
+            print("ℹ️ 無歷史存檔，從頭開始演化")
+
+    def update(self, pareto_front: List):
+        """更新 Pareto 前緣"""
+        # 合併新舊個體
+        all_individuals = self.archive + [
+            {'genes': list(ind), 'fitness': ind.fitness.values, 'timestamp': datetime.now().isoformat()}
+            for ind in pareto_front
+        ]
+
+        # 去重
+        unique = self._deduplicate(all_individuals)
+
+        # 保留前 50 名
+        unique.sort(key=lambda x: sum(x['fitness']), reverse=True)
+        self.archive = unique[:50]
+
+        # 保存
+        self._save()
+
+        return len(self.archive)
+
+    def _deduplicate(self, individuals: List[Dict]) -> List[Dict]:
+        """去重"""
+        seen = set()
+        unique = []
+
+        for ind in individuals:
+            gene_hash = hashlib.md5(str(ind['genes'][:15]).encode()).hexdigest()
+            if gene_hash not in seen:
+                seen.add(gene_hash)
+                unique.append(ind)
+
+        return unique
+
+    def _save(self):
+        """保存到檔案"""
+        try:
+            Path(os.path.dirname(self.archive_file)).mkdir(parents=True, exist_ok=True)
+            with open(self.archive_file, 'wb') as f:
+                pickle.dump({
+                    'individuals': self.archive,
+                    'timestamp': datetime.now().isoformat(),
+                    'version': '9combo_mama_dragon_v1.0',
+                }, f)
+            print(f"   💾 已保存 {len(self.archive)} 個精英到 Pareto Archive")
+        except Exception as e:
+            print(f"⚠️ 保存失敗: {e}")
+
+    def inject_elites(self, population: List, ratio: float = 0.3) -> List:
+        """將歷史精英注入族群"""
+        if not self.archive:
+            return population
+
+        n_inject = int(len(population) * ratio)
+        n_inject = min(n_inject, len(self.archive))
+
+        # 選擇最佳精英
+        elites = sorted(self.archive, key=lambda x: sum(x['fitness']), reverse=True)[:n_inject]
+
+        # 替換族群中最差的個體
+        population.sort(key=lambda ind: sum(ind.fitness.values) if ind.fitness.valid else -999)
+
+        for i, elite in enumerate(elites):
+            population[i][:] = elite['genes']
+            if hasattr(population[i], 'fitness'):
+                del population[i].fitness.values
+
+        print(f"   🧬 注入 {n_inject} 個歷史精英")
+        return population
+
+    def get_best(self) -> Optional[Dict]:
+        """獲取最佳個體"""
+        if not self.archive:
+            return None
+        return max(self.archive, key=lambda x: sum(x['fitness']))
+
+# =============================================================================
+# 第十三部分：演化引擎
+# =============================================================================
+class EvolutionEngine:
+    """基因演算法演化引擎 - 支援持續演進"""
+
+    def __init__(self, pareto_mgr: ParetoArchiveManager):
+        self.pareto_mgr = pareto_mgr
+        self.history = []
+        self.best_ever = None
+        self.checkpoint_file = f"{BASE_DIR}/ga_checkpoint_9combo.pkl"
+
+    def run(self, n_generations: int = N_GENERATIONS, resume: bool = True) -> Tuple[List, List]:
+        """
+        執行演化
+
+        Args:
+            n_generations: 演化世代數
+            resume: 是否從斷點續傳
+        """
+        print(f"\n{'='*70}")
+        print(f"🧬 開始基因演算法優化")
+        print(f"   族群大小: {POPULATION_SIZE}")
+        print(f"   演化世代: {n_generations}")
+        print(f"   目標夏普: >= {TARGET_SHARPE}")
+        print(f"   目標胃納量: >= {MIN_CAPACITY/1e4:.0f}萬")
+        print(f"{'='*70}\n")
+
+        start_gen = 0
+
+        # 嘗試從斷點恢復
+        if resume and os.path.exists(self.checkpoint_file):
+            try:
+                checkpoint = self._load_checkpoint()
+                if checkpoint:
+                    population = checkpoint['population']
+                    start_gen = checkpoint['generation'] + 1
+                    self.history = checkpoint.get('history', [])
+                    print(f"✅ 從第 {start_gen} 代恢復演化")
+            except:
+                population = None
+        else:
+            population = None
+
+        # 初始化族群
+        if population is None:
+            population = toolbox.population(n=POPULATION_SIZE)
+            # 注入歷史精英
+            population = self.pareto_mgr.inject_elites(population, ratio=0.3)
+
+        # 初始評估
+        population = self._evaluate_population(population)
+
+        # 演化循環
+        for gen in range(start_gen, n_generations):
+            start_time = time.time()
+
+            # 選擇
+            offspring = toolbox.select(population, len(population))
+            offspring = list(map(toolbox.clone, offspring))
+
+            # 交叉
+            for child1, child2 in zip(offspring[::2], offspring[1::2]):
+                if random.random() < CROSSOVER_RATE:
+                    toolbox.mate(child1, child2)
+                    del child1.fitness.values
+                    del child2.fitness.values
+
+            # 變異
+            for mutant in offspring:
+                if random.random() < MUTATION_RATE:
+                    toolbox.mutate(mutant)
+                    del mutant.fitness.values
+
+            # 評估
+            offspring = self._evaluate_population(offspring)
+
+            # 環境選擇 (NSGA-II)
+            population = toolbox.select(population + offspring, POPULATION_SIZE)
+
+            # 統計
+            stats = self._compute_stats(population, gen)
+            self.history.append(stats)
+
+            elapsed = time.time() - start_time
+
+            # 輸出進度
+            if (gen + 1) % 5 == 0 or gen == 0:
+                print(f"\n=== 第 {gen+1}/{n_generations} 代 ===")
+                print(f"   最佳綜合: {stats['best_composite']:.4f}")
+                print(f"   最佳夏普: {stats['best_sharpe']:.2f}")
+                print(f"   最佳胃納量: {stats['best_capacity']:.0f} 萬")
+                print(f"   耗時: {elapsed:.1f}s")
+
+            # 🔥 每 5 代進行完整回測
+            if (gen + 1) % FULL_BACKTEST_INTERVAL == 0:
+                self._run_full_backtest(population, gen)
+
+            # 🔥 每 5 代保存斷點（Checkpoint）
+            if (gen + 1) % CHECKPOINT_INTERVAL == 0:
+                self._save_checkpoint(population, gen)
+                # 同時更新 Pareto Archive
+                current_front = tools.sortNondominated(population, len(population), first_front_only=True)[0]
+                self.pareto_mgr.update(current_front)
+
+        # 取得 Pareto 前緣
+        pareto_front = tools.sortNondominated(population, len(population), first_front_only=True)[0]
+
+        # 更新 Pareto Archive
+        n_saved = self.pareto_mgr.update(pareto_front)
+        print(f"\n✅ 演化完成！保存了 {n_saved} 個 Pareto 最優解")
+
+        # 輸出最佳結果
+        self._print_best_results(pareto_front)
+
+        return population, pareto_front
+
+    def _evaluate_population(self, population: List) -> List:
+        """評估族群"""
+        invalid = [ind for ind in population if not ind.fitness.valid]
+
+        if not invalid:
+            return population
+
+        print(f"   評估 {len(invalid)} 個個體...")
+
+        for i, ind in enumerate(invalid):
+            fitness = evaluate_fitness(ind)
+            ind.fitness.values = fitness
+
+            if (i + 1) % 10 == 0:
+                print(f"   進度: {i+1}/{len(invalid)}")
+
+        return population
+
+    def _compute_stats(self, population: List, gen: int) -> Dict:
+        """計算統計"""
+        fitnesses = [ind.fitness.values for ind in population]
+
+        composites = [f[0] for f in fitnesses]
+        sharpes = [f[1] / 5.0 * TARGET_SHARPE for f in fitnesses]
+        capacities = [f[2] / 5.0 * MIN_CAPACITY / 1e4 for f in fitnesses]
+
+        stats = {
+            'generation': gen,
+            'best_composite': max(composites),
+            'avg_composite': np.mean(composites),
+            'best_sharpe': max(sharpes),
+            'avg_sharpe': np.mean(sharpes),
+            'best_capacity': max(capacities),
+            'timestamp': datetime.now().isoformat(),
+        }
+
+        return stats
+
+    def _save_checkpoint(self, population: List, gen: int):
+        """保存斷點"""
+        try:
+            Path(os.path.dirname(self.checkpoint_file)).mkdir(parents=True, exist_ok=True)
+            checkpoint = {
+                'population': population,
+                'generation': gen,
+                'history': self.history,
+                'timestamp': datetime.now().isoformat(),
+            }
+            with open(self.checkpoint_file, 'wb') as f:
+                pickle.dump(checkpoint, f)
+            print(f"   💾 斷點已保存 (第 {gen+1} 代)")
+        except Exception as e:
+            print(f"   ⚠️ 斷點保存失敗: {e}")
+
+    def _load_checkpoint(self) -> Optional[Dict]:
+        """載入斷點"""
+        try:
+            with open(self.checkpoint_file, 'rb') as f:
+                return pickle.load(f)
+        except:
+            return None
+
+    def _run_full_backtest(self, population: List, gen: int):
+        """
+        每 N 代進行完整回測
+        找出當前最佳個體並執行詳細回測
+        """
+        print(f"\n{'='*60}")
+        print(f"🔬 第 {gen+1} 代 - 完整回測檢查")
+        print(f"{'='*60}")
+
+        # 找出最佳個體
+        best_ind = max(population, key=lambda x: sum(x.fitness.values))
+        params = gene_decoder.decode(best_ind)
+
+        # 執行完整回測
+        position = strategy_engine.combine_all_strategies(params)
+        result = run_backtest(position, params, f"第{gen+1}代最佳", full_report=True)
+
+        # 記錄是否達標
+        if result.get('meets_all', False):
+            print(f"\n🎉 第 {gen+1} 代找到達標解！")
+            # 立即保存達標解
+            self._save_qualified_solution(best_ind, result, gen)
+
+        return result
+
+    def _save_qualified_solution(self, individual, result: Dict, gen: int):
+        """保存達標解"""
+        try:
+            qualified_file = f"{BASE_DIR}/qualified_solutions.json"
+            solutions = []
+
+            if os.path.exists(qualified_file):
+                with open(qualified_file, 'r', encoding='utf-8') as f:
+                    solutions = json.load(f)
+
+            solution = {
+                'generation': gen + 1,
+                'genes': list(individual),
+                'sharpe': result['sharpe'],
+                'capacity': result['capacity'],
+                'max_drawdown': result['max_drawdown'],
+                'annual_return': result['annual_return'],
+                'timestamp': datetime.now().isoformat(),
+            }
+            solutions.append(solution)
+
+            Path(os.path.dirname(qualified_file)).mkdir(parents=True, exist_ok=True)
+            with open(qualified_file, 'w', encoding='utf-8') as f:
+                json.dump(solutions, f, indent=2, ensure_ascii=False)
+
+            print(f"   💾 達標解已保存！(共 {len(solutions)} 個)")
+        except Exception as e:
+            print(f"   ⚠️ 保存達標解失敗: {e}")
+
+    def _print_best_results(self, pareto_front: List):
+        """輸出最佳結果"""
+        print(f"\n{'='*70}")
+        print(f"🏆 Pareto 最優解集（前 10 名）")
+        print(f"{'='*70}")
+        print(f"{'排名':<6}{'綜合':<10}{'夏普':<10}{'胃納量(萬)':<12}{'達標'}")
+        print("-" * 70)
+
+        sorted_front = sorted(pareto_front, key=lambda x: sum(x.fitness.values), reverse=True)[:10]
+
+        for i, ind in enumerate(sorted_front, 1):
+            composite = ind.fitness.values[0]
+            sharpe = ind.fitness.values[1] / 5.0 * TARGET_SHARPE
+            capacity = ind.fitness.values[2] / 5.0 * MIN_CAPACITY / 1e4
+
+            reached = "✅" if sharpe >= TARGET_SHARPE * 0.9 and capacity >= MIN_CAPACITY / 1e4 * 0.9 else ""
+
+            print(f"{i:<6}{composite:<10.4f}{sharpe:<10.2f}{capacity:<12.2f}{reached}")
+
+# =============================================================================
+# 第十四部分：完整回測最佳個體
+# =============================================================================
+def backtest_best_individual(pareto_mgr: ParetoArchiveManager):
+    """對最佳個體進行完整回測"""
+    best = pareto_mgr.get_best()
+
+    if not best:
+        print("⚠️ 無歷史最佳個體")
+        return None
+
+    print(f"\n{'='*70}")
+    print("📊 最佳個體完整回測")
+    print(f"{'='*70}")
+
+    params = gene_decoder.decode(best['genes'])
+
+    # 顯示策略權重
+    print("\n🎯 策略權重配置：")
+    strategy_names = ['低波動本益比', '小資族', '營收雙渦輪', '高殖利率烏龜',
+                      '低波動指標', '大盤指針', '小蝦米大鯨魚', '純技術趨勢', '財報20大']
+    for i, name in enumerate(strategy_names):
+        weight = params.get(f'weight_{i+1}', 0)
+        bar = '█' * int(weight * 50)
+        print(f"   {name:<12}: {weight*100:5.1f}% {bar}")
+
+    # 執行回測
+    position = strategy_engine.combine_all_strategies(params)
+
+    if position is not None and not position.empty:
+        print("\n📈 執行完整回測...")
+
+        report = sim(
+            position=position,
+            fee_ratio=1.425 / 1000,
+            tax_ratio=3 / 1000,
+            trade_at_price="high_low_avg",
+            position_limit=params.get('position_limit', 0.35),
+            stop_loss=params.get('stop_loss', 0.25),
+            stop_trading_next_period=False,
+            upload=False,
+            name='九組合媽媽龍_最佳化',
+            live_performance_start='2022-01-01',
+        )
+
+        report.display()
+
+        # 保存最佳參數
+        params_file = f"{BASE_DIR}/best_params_9combo.json"
+        try:
+            Path(os.path.dirname(params_file)).mkdir(parents=True, exist_ok=True)
+            with open(params_file, 'w', encoding='utf-8') as f:
+                json.dump(params, f, indent=2, ensure_ascii=False)
+            print(f"\n✅ 最佳參數已保存: {params_file}")
+        except:
+            pass
+
+        return report
+
+    return None
+
+# =============================================================================
+# 第十五部分：主程式入口
+# =============================================================================
+def main():
+    """主程式入口"""
     print("""
     ╔══════════════════════════════════════════════════════════════════════╗
-    ║                   🐉 九組合媽媽龍策略系統                             ║
-    ║                   Nine Combo Mama Dragon Strategy                   ║
+    ║           🐉 九組合媽媽龍策略 - 基因演算法優化系統                    ║
+    ║           Nine Combo Mama Dragon - GA Optimization                  ║
     ╠══════════════════════════════════════════════════════════════════════╣
-    ║  原六組合快快龍 + 三個新策略 = 九組合媽媽龍                           ║
+    ║  🧬 NSGA-II 多目標優化                                               ║
+    ║  📊 Pareto Archive 持續演進                                          ║
+    ║  💾 斷點續傳支援                                                     ║
+    ║  🎯 目標：夏普 >= 4.0, 胃納量 >= 1000萬                              ║
     ╚══════════════════════════════════════════════════════════════════════╝
     """)
 
-    # 執行策略分析
-    results, combined = analyze_strategies()
+    # 選擇執行模式
+    print("\n請選擇執行模式：")
+    print("  1. 策略分析（快速）")
+    print("  2. 基因演算法優化（完整）")
+    print("  3. 回測最佳個體")
+    print("  4. Live Performance 回測")
 
-    # 執行 live performance 回測
-    run_live_backtest()
+    # 預設執行完整優化
+    mode = 2
 
-    print("\n✅ 九組合媽媽龍策略分析完成！")
+    if mode == 1:
+        # 策略分析
+        results, combined = analyze_strategies()
+
+    elif mode == 2:
+        # 基因演算法優化
+        pareto_mgr = ParetoArchiveManager()
+        engine = EvolutionEngine(pareto_mgr)
+
+        # 執行演化（支援斷點續傳）
+        population, pareto_front = engine.run(n_generations=N_GENERATIONS, resume=True)
+
+        # 回測最佳個體
+        backtest_best_individual(pareto_mgr)
+
+    elif mode == 3:
+        # 回測最佳個體
+        pareto_mgr = ParetoArchiveManager()
+        backtest_best_individual(pareto_mgr)
+
+    elif mode == 4:
+        # Live Performance 回測
+        run_live_backtest()
+
+    print("\n✅ 九組合媽媽龍策略系統執行完成！")
+
+if __name__ == "__main__":
+    main()
