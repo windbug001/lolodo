@@ -910,117 +910,117 @@ def gene_to_params(gene):
     else:
         allocation = [gene[i]/alloc_sum for i in range(6)]
 
-    # === 策略1: 低波動本益比策略參數 ===
+    # === 策略1: 低波動本益比策略參數 (適用 [0,1] 基因) ===
     low_vol_pe_params = {
-        'rev_ma3_ma12_ratio': gene[6],
-        'rev_consistency': gene[7],
-        'volatility_threshold': gene[8]/1000,
-        'margin_usage_limit': gene[9],
-        'non_op_income_limit': gene[10],
-        'min_volume': abs(gene[11] * 1000),
-        'pe_min': gene[12],
-        'pe_max': gene[13],
-        'top_n': max(1, int(gene[14])),
-        'min_rev_yoy_threshold': -gene[120],
-        'rev_decline_period': max(1, int(gene[121])),
-        'max_rev_yoy_threshold': gene[122],
-        'old_trend_period': max(1, int(gene[123])),
-        'old_trend_match': max(1, int(gene[124])),
-        'rev_bottom_window': max(1, int(gene[125])),
-        'rev_bottom_ratio': gene[126],
-        'rev_bottom_sustain': max(1, int(gene[127])),
-        'min_rev_mom_growth': -gene[128],
-        'rev_mom_sustain': max(1, int(gene[129])),
-        'quarter_ma': max(1, int(gene[130])),
-        'half_year_ma': max(1, int(gene[131])),
-        'long_ma': max(1, int(gene[132])),
-        'recent_rev_period': max(1, int(gene[133])),
-        'annual_rev_period': max(1, int(gene[134])),
-        'pb_min': gene[135],
-        'pb_max': gene[136],
-        'min_gpm': gene[137],
-        'gpm_sustain_period': max(1, int(gene[138])),
-        'min_roe': gene[139],
-        'roe_sustain_period': max(1, int(gene[140]))
+        'rev_ma3_ma12_ratio': gene[6] * 0.3 + 0.9,      # 0.9 ~ 1.2
+        'rev_consistency': gene[7] * 0.2 + 0.9,         # 0.9 ~ 1.1
+        'volatility_threshold': gene[8] * 0.05 + 0.01,  # 1% ~ 6%
+        'margin_usage_limit': gene[9] * 50 + 10,        # 10% ~ 60%
+        'non_op_income_limit': gene[10] * 15 + 5,       # 5% ~ 20%
+        'min_volume': gene[11] * 400 + 100,             # 100 ~ 500 張
+        'pe_min': gene[12] * 10 + 5,                    # 5 ~ 15
+        'pe_max': gene[13] * 20 + 15,                   # 15 ~ 35
+        'top_n': max(3, int(gene[14] * 12 + 3)),        # 3 ~ 15
+        'min_rev_yoy_threshold': gene[120] * 30,        # 0% ~ 30%
+        'rev_decline_period': max(1, int(gene[121] * 5 + 1)),  # 1 ~ 6
+        'max_rev_yoy_threshold': gene[122] * 50 + 30,   # 30% ~ 80%
+        'old_trend_period': max(6, int(gene[123] * 12 + 6)),   # 6 ~ 18
+        'old_trend_match': max(3, int(gene[124] * 6 + 3)),     # 3 ~ 9
+        'rev_bottom_window': max(6, int(gene[125] * 12 + 6)),  # 6 ~ 18
+        'rev_bottom_ratio': gene[126] * 0.3 + 1.0,      # 1.0 ~ 1.3
+        'rev_bottom_sustain': max(1, int(gene[127] * 4 + 1)),  # 1 ~ 5
+        'min_rev_mom_growth': gene[128] * 20,           # 0% ~ 20%
+        'rev_mom_sustain': max(1, int(gene[129] * 4 + 1)),     # 1 ~ 5
+        'quarter_ma': max(20, int(gene[130] * 40 + 20)),       # 20 ~ 60
+        'half_year_ma': max(60, int(gene[131] * 60 + 60)),     # 60 ~ 120
+        'long_ma': max(120, int(gene[132] * 130 + 120)),       # 120 ~ 250
+        'recent_rev_period': max(1, int(gene[133] * 4 + 1)),   # 1 ~ 5
+        'annual_rev_period': max(6, int(gene[134] * 12 + 6)),  # 6 ~ 18
+        'pb_min': gene[135] * 1.5 + 0.5,                # 0.5 ~ 2.0
+        'pb_max': gene[136] * 3.0 + 2.0,                # 2.0 ~ 5.0
+        'min_gpm': gene[137] * 20 + 10,                 # 10% ~ 30%
+        'gpm_sustain_period': max(1, int(gene[138] * 5 + 1)),  # 1 ~ 6
+        'min_roe': gene[139] * 15 + 5,                  # 5% ~ 20%
+        'roe_sustain_period': max(1, int(gene[140] * 5 + 1))   # 1 ~ 6
     }
 
-    # === 策略2: 小資族策略參數 ===
+    # === 策略2: 小資族策略參數 (適用 [0,1] 基因) ===
     small_inv_params = {
-        'market_value_limit': gene[15] * 1e9,
-        'market_rev_ratio_limit': gene[16],
-        'rev_yoy_growth_limit': -gene[17],
-        'rev_mom_growth_limit': -gene[18],
-        'rsv_period': max(1, int(gene[19])),
-        'ma_period': max(1, int(gene[20])),
-        'volume_threshold': abs(gene[21] * 1000),
-        'top_n': max(1, int(gene[22])),
-        'min_free_cash_flow': gene[150],
-        'min_roe': gene[151],
-        'min_op_profit_growth': gene[152]
+        'market_value_limit': gene[15] * 40e9 + 10e9,   # 100億 ~ 500億
+        'market_rev_ratio_limit': gene[16] * 3 + 1,     # 1 ~ 4
+        'rev_yoy_growth_limit': gene[17] * 30,          # 0% ~ 30%
+        'rev_mom_growth_limit': gene[18] * 20,          # 0% ~ 20%
+        'rsv_period': max(5, int(gene[19] * 15 + 5)),   # 5 ~ 20
+        'ma_period': max(10, int(gene[20] * 50 + 10)),  # 10 ~ 60
+        'volume_threshold': gene[21] * 400 + 100,       # 100 ~ 500 張
+        'top_n': max(3, int(gene[22] * 12 + 3)),        # 3 ~ 15
+        'min_free_cash_flow': gene[150] * 1e8,          # 0 ~ 1億
+        'min_roe': gene[151] * 15 + 5,                  # 5% ~ 20%
+        'min_op_profit_growth': gene[152] * 30          # 0% ~ 30%
     }
 
-    # === 策略3: 營收股價雙渦輪策略參數 ===
+    # === 策略3: 營收股價雙渦輪策略參數 (適用 [0,1] 基因) ===
     turbo_params = {
-        'rev_ma_period': max(1, int(gene[23])),
-        'rev_ma_lookback': max(1, int(gene[24])),
-        'price_high_window': max(1, int(gene[25])),
-        'min_volume': abs(gene[26] * 1000),
-        'min_price': gene[27],
-        'rsi_threshold': gene[28],
-        'pe_limit': gene[29],
-        'top_n': max(1, int(gene[30])),
-        'performance_ma_period': max(1, int(gene[100])),
-        'performance_threshold': gene[101],
-        'rsi_trend_period': max(1, int(gene[102])),
-        'min_gpm': gene[103],
-        'gpm_sustain_period': max(1, int(gene[104])),
-        'min_btpm': gene[105],
-        'btpm_sustain_period': max(1, int(gene[106])),
-        'min_atpm': gene[107],
-        'atpm_sustain_period': max(1, int(gene[108])),
-        'rev_growth_percentile': gene[109],
-        'boss_min_level': max(1, int(gene[110])),
-        'boss_max_level': max(1, int(gene[111])),
-        'min_boss_ratio': gene[112]
+        'rev_ma_period': max(1, int(gene[23] * 5 + 1)), # 1 ~ 6
+        'rev_ma_lookback': max(6, int(gene[24] * 18 + 6)),  # 6 ~ 24
+        'price_high_window': max(5, int(gene[25] * 25 + 5)),  # 5 ~ 30
+        'min_volume': gene[26] * 400 + 100,             # 100 ~ 500 張
+        'min_price': gene[27] * 40 + 10,                # 10 ~ 50 元
+        'rsi_threshold': gene[28] * 30 + 50,            # 50 ~ 80
+        'pe_limit': gene[29] * 30 + 20,                 # 20 ~ 50
+        'top_n': max(3, int(gene[30] * 12 + 3)),        # 3 ~ 15
+        'performance_ma_period': max(20, int(gene[100] * 40 + 20)),  # 20 ~ 60
+        'performance_threshold': gene[101] * 0.3 + 1.0, # 1.0 ~ 1.3
+        'rsi_trend_period': max(1, int(gene[102] * 5 + 1)),  # 1 ~ 6
+        'min_gpm': gene[103] * 20 + 10,                 # 10% ~ 30%
+        'gpm_sustain_period': max(1, int(gene[104] * 5 + 1)),  # 1 ~ 6
+        'min_btpm': gene[105] * 15 + 5,                 # 5% ~ 20%
+        'btpm_sustain_period': max(1, int(gene[106] * 5 + 1)),  # 1 ~ 6
+        'min_atpm': gene[107] * 10 + 3,                 # 3% ~ 13%
+        'atpm_sustain_period': max(1, int(gene[108] * 5 + 1)),  # 1 ~ 6
+        'rev_growth_percentile': gene[109] * 0.3 + 0.6, # 0.6 ~ 0.9
+        'boss_min_level': max(9, int(gene[110] * 6 + 9)),   # 9 ~ 15
+        'boss_max_level': max(12, int(gene[111] * 3 + 12)), # 12 ~ 15
+        'min_boss_ratio': gene[112] * 30 + 20           # 20% ~ 50%
     }
 
-    # === 策略4: 高殖利率烏龜策略參數 ===
+    # === 策略4: 高殖利率烏龜策略參數 (適用 [0,1] 基因) ===
     high_yield_turtle_params = {
-        'min_yield_ratio': gene[31],
-        'min_op_earn_ratio': gene[32],
-        'min_boss_hold': gene[33],
-        'min_volume': gene[34] * 1000,
-        'max_volume': gene[35] * 1000,
-        'top_n': int(gene[36])
+        'min_yield_ratio': gene[31] * 4 + 3,            # 3% ~ 7%
+        'min_op_earn_ratio': gene[32] * 10 + 5,         # 5% ~ 15%
+        'min_boss_hold': gene[33] * 20 + 10,            # 10% ~ 30%
+        'min_volume': gene[34] * 400 + 100,             # 100 ~ 500 張
+        'max_volume': gene[35] * 4000 + 1000,           # 1000 ~ 5000 張
+        'top_n': max(3, int(gene[36] * 12 + 3))         # 3 ~ 15
     }
 
-    # === 策略5: 低波動性指標策略參數 ===
+    # === 策略5: 低波動性指標策略參數 (適用 [0,1] 基因) ===
     low_vol_index_params = {
-        'min_volume': gene[37] * 1000,
-        'std_window': int(gene[38]),
-        'std_threshold': gene[39],
-        'top_n': int(gene[40])
+        'min_volume': gene[37] * 400 + 100,             # 100 ~ 500 張
+        'std_window': max(10, int(gene[38] * 50 + 10)), # 10 ~ 60
+        'std_threshold': gene[39] * 0.3 + 0.1,          # 0.1 ~ 0.4
+        'top_n': max(3, int(gene[40] * 12 + 3))         # 3 ~ 15
     }
 
-    # === 策略6: 藏獒外掛大盤指針策略參數 ===
+    # === 策略6: 藏獒外掛大盤指針策略參數 (適用 [0,1] 基因) ===
     market_indicator_params = {
-        'new_high_window': int(gene[43]),
-        'min_year_growth': -gene[44],
-        'max_year_growth': gene[45],
-        'rev_bottom_ratio': gene[46],
-        'min_month_growth': -gene[47],
-        'min_volume': gene[48] * 1000,
-        'top_n': int(gene[49])
+        'new_high_window': max(60, int(gene[43] * 200 + 60)),  # 60 ~ 260
+        'min_year_growth': gene[44] * 30,               # 0% ~ 30%
+        'max_year_growth': gene[45] * 50 + 30,          # 30% ~ 80%
+        'rev_bottom_ratio': gene[46] * 0.3 + 1.0,       # 1.0 ~ 1.3
+        'min_month_growth': gene[47] * 20,              # 0% ~ 20%
+        'min_volume': gene[48] * 400 + 100,             # 100 ~ 500 張
+        'top_n': max(3, int(gene[49] * 12 + 3))         # 3 ~ 15
     }
 
-    # === 總體參數 ===
+    # === 總體參數 (修正：適用於 [0,1] 基因範圍) ===
     overall_params = {
-        'stop_loss': gene[51]/100,
-        'trail_stop': gene[52]/100,
-        'take_profit': gene[53]/100,
-        'position_limit': gene[54]/100,
-        'trade_at_price': ["open", "close", "high_low_avg", "open_close_avg"][int(gene[55]) % 4],
-        'liquidity_threshold': gene[56] * 1e6,
+        'stop_loss': gene[51] * 0.15 + 0.05,      # 5% ~ 20%
+        'trail_stop': gene[52] * 0.10 + 0.03,     # 3% ~ 13%
+        'take_profit': gene[53] * 0.40 + 0.10,    # 10% ~ 50%
+        'position_limit': gene[54] * 0.20 + 0.20, # 20% ~ 40%
+        'trade_at_price': ["open", "close"][int(gene[55] * 2) % 2],  # 只用 open 或 close
+        'liquidity_threshold': gene[56] * 5e6 + 1e6,  # 100萬 ~ 600萬
     }
 
     return allocation, low_vol_pe_params, small_inv_params, turbo_params, high_yield_turtle_params, low_vol_index_params, market_indicator_params, overall_params
