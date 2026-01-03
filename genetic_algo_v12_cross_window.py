@@ -2266,22 +2266,49 @@ creator.create("Individual", list, fitness=creator.FitnessMax)
 GENE_LENGTH = 160
 
 # 🔥 unbounded 基因格式的邊界設定
-# 根據 gene_to_params 的實際使用範圍：
-# - 大多數參數用 gene[i]/100 或 gene[i]/1000，所以值在 0-1000 內
-# - 有些用 gene[i] * 1000，所以需要更大範圍
-GENE_LOW = -500.0    # 允許負值（某些參數可能需要）
-GENE_HIGH = 500.0    # 最大值
+GENE_LOW = -500.0
+GENE_HIGH = 500.0
+
+# 🔧 安全的交叉操作（避免產生複數）
+def safe_cxBlend(ind1, ind2, alpha=0.5):
+    """安全的混合交叉，不會產生複數"""
+    for i in range(len(ind1)):
+        # 確保是實數
+        x1 = float(ind1[i].real) if isinstance(ind1[i], complex) else float(ind1[i])
+        x2 = float(ind2[i].real) if isinstance(ind2[i], complex) else float(ind2[i])
+
+        gamma = (1.0 + 2.0 * alpha) * random.random() - alpha
+        ind1[i] = (1.0 - gamma) * x1 + gamma * x2
+        ind2[i] = gamma * x1 + (1.0 - gamma) * x2
+
+        # 確保在範圍內
+        ind1[i] = max(GENE_LOW, min(GENE_HIGH, ind1[i]))
+        ind2[i] = max(GENE_LOW, min(GENE_HIGH, ind2[i]))
+
+    return ind1, ind2
+
+# 🔧 安全的突變操作
+def safe_mutGaussian(individual, mu=0, sigma=50, indpb=0.1):
+    """安全的高斯突變，不會產生複數"""
+    for i in range(len(individual)):
+        if random.random() < indpb:
+            # 確保是實數
+            val = float(individual[i].real) if isinstance(individual[i], complex) else float(individual[i])
+            val += random.gauss(mu, sigma)
+            # 確保在範圍內
+            individual[i] = max(GENE_LOW, min(GENE_HIGH, val))
+    return individual,
 
 toolbox = base.Toolbox()
-toolbox.register("attr_float", random.uniform, GENE_LOW, GENE_HIGH)  # 🔥 改用更大範圍
+toolbox.register("attr_float", random.uniform, GENE_LOW, GENE_HIGH)
 toolbox.register("individual", tools.initRepeat, creator.Individual, toolbox.attr_float, n=GENE_LENGTH)
 toolbox.register("population", tools.initRepeat, list, toolbox.individual)
 toolbox.register("evaluate", evaluate_fitness)
-toolbox.register("mate", tools.cxSimulatedBinaryBounded, low=GENE_LOW, up=GENE_HIGH, eta=20.0)  # 🔥 擴大邊界
-toolbox.register("mutate", tools.mutPolynomialBounded, low=GENE_LOW, up=GENE_HIGH, eta=20.0, indpb=0.1)  # 🔥 擴大邊界
+toolbox.register("mate", safe_cxBlend, alpha=0.5)  # 🔥 使用安全交叉
+toolbox.register("mutate", safe_mutGaussian, mu=0, sigma=50, indpb=0.1)  # 🔥 使用安全突變
 toolbox.register("select", tools.selTournament, tournsize=3)
 
-print("✅ DEAP GA 配置完成 (unbounded 格式, 範圍: [{}, {}])".format(GENE_LOW, GENE_HIGH))
+print("✅ DEAP GA 配置完成 (安全模式, 不會產生複數)")
 
 # =============================================================================
 # 歷史精英載入
