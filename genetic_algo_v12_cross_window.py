@@ -122,6 +122,9 @@ DISCORD_WEBHOOK_URL = "https://discord.com/api/webhooks/1429310065877323796/U8le
 # 🔥 新增：從指定 checkpoint 開始演化
 CHECKPOINT_PATH = os.environ.get('CHECKPOINT_PATH', None)  # 例如: checkpoint_window_1_latest.pkl
 
+# 🏆 新增：匯入外部優秀基因到歷史前20
+IMPORT_TOP_GENES_PATH = os.environ.get('IMPORT_TOP_GENES_PATH', None)  # 例如: top5_genes_for_evolution.pkl
+
 # 🎯 2026 統一優化目標
 TARGET_SHARPE = 4.2          # 🔥 目標夏普值 4.2
 MIN_CAPACITY = 10_000_000    # 🔥 胃納量 1000萬
@@ -882,6 +885,82 @@ class HistoricalTop20Manager:
         except Exception as e:
             print(f"⚠️ 合併失敗: {e}")
 
+    def import_from_evolution_file(self, filepath: str):
+        """
+        從外部演化結果檔案匯入優秀基因
+        支援格式：top5_genes_for_evolution.pkl 或類似結構
+        """
+        try:
+            if not os.path.exists(filepath):
+                print(f"⚠️ 檔案不存在: {filepath}")
+                return False
+
+            with open(filepath, 'rb') as f:
+                data = pickle.load(f)
+
+            imported_count = 0
+
+            # 支援多種格式
+            if isinstance(data, list):
+                # 格式1: 純基因列表 [{genes, sharpe, ...}, ...]
+                for item in data:
+                    if isinstance(item, dict):
+                        genes = item.get('genes') or item.get('gene')
+                        sharpe = item.get('sharpe') or item.get('fitness', 0)
+                        annual_return = item.get('annual_return') or item.get('年化收益')
+                        capacity = item.get('capacity') or item.get('胃納量')
+
+                        if genes and sharpe > 0:
+                            self.update(
+                                genes=genes,
+                                sharpe=sharpe,
+                                metadata={
+                                    'annual_return': annual_return,
+                                    'capacity': capacity,
+                                    'source': filepath
+                                }
+                            )
+                            imported_count += 1
+
+            elif isinstance(data, dict):
+                # 格式2: checkpoint 格式
+                if 'population' in data:
+                    for ind_data in data['population'][:20]:
+                        if isinstance(ind_data, dict):
+                            genes = ind_data.get('genes')
+                            fitness = ind_data.get('fitness', 0)
+                        else:
+                            genes = list(ind_data)
+                            fitness = ind_data.fitness.values[0] if hasattr(ind_data, 'fitness') and ind_data.fitness.valid else 0
+
+                        if genes and fitness > 0:
+                            self.update(genes=genes, sharpe=fitness)
+                            imported_count += 1
+
+                # 格式3: halloffame
+                if 'halloffame' in data:
+                    for item in data['halloffame']:
+                        if isinstance(item, dict):
+                            genes = item.get('genes')
+                            fitness = item.get('fitness', 0)
+                        else:
+                            genes = list(item)
+                            fitness = item.fitness.values[0] if hasattr(item, 'fitness') and item.fitness.valid else 0
+
+                        if genes and fitness > 0:
+                            self.update(genes=genes, sharpe=fitness)
+                            imported_count += 1
+
+            print(f"✅ 已從 {os.path.basename(filepath)} 匯入 {imported_count} 個優秀基因")
+            self.print_summary()
+            return True
+
+        except Exception as e:
+            print(f"⚠️ 匯入失敗: {e}")
+            import traceback
+            traceback.print_exc()
+            return False
+
 # 全域歷史前20管理器（稍後初始化）
 historical_top20_mgr = None
 
@@ -1074,6 +1153,11 @@ print("✅ Checkpoint 管理器已初始化")
 # 🏆 初始化歷史前20管理器 (v12.6 新增)
 historical_top20_mgr = HistoricalTop20Manager(BASE_DIR, WINDOW_ID)
 print(f"🏆 歷史前20管理器已初始化 (目前有 {len(historical_top20_mgr.top20)} 個歷史最佳)")
+
+# 🔥 自動匯入外部優秀基因（如果有指定）
+if IMPORT_TOP_GENES_PATH:
+    print(f"\n📥 匯入外部優秀基因: {IMPORT_TOP_GENES_PATH}")
+    historical_top20_mgr.import_from_evolution_file(IMPORT_TOP_GENES_PATH)
 
 # =============================================================================
 # 安全條件計算函數
