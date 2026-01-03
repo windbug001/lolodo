@@ -3111,25 +3111,26 @@ def seed_evolution_from_stable_genes(n_generations=50, mutation_boost=1.5):
 
     return population, final_best
 
-# 環境變數：繼續演化模式
-CONTINUE_EVOLUTION = os.environ.get('CONTINUE_EVOLUTION', '').lower() == 'true'
-EVOLUTION_GENERATIONS = int(os.environ.get('EVOLUTION_GENERATIONS', '50'))
-
 # =============================================================================
 # 主程式
 # =============================================================================
 def main():
+    # 🔥 在 main() 內部讀取環境變數（確保 %run 時能正確讀取）
+    evaluate_mode = os.environ.get('EVALUATE_MODE', '').lower() == 'true'
+    continue_evolution = os.environ.get('CONTINUE_EVOLUTION', '').lower() == 'true'
+    evolution_generations = int(os.environ.get('EVOLUTION_GENERATIONS', '50'))
+
     # 🔬 評估模式：只評估歷史前20，不演化
-    if EVALUATE_MODE:
+    if evaluate_mode:
         print("🔬 評估模式啟動...")
         results = evaluate_historical_top20()
         return None, results
 
     # 🧬 繼續演化模式：從穩定基因繼續演化
-    if CONTINUE_EVOLUTION:
+    if continue_evolution:
         print("🧬 繼續演化模式啟動...")
         population, best = seed_evolution_from_stable_genes(
-            n_generations=EVOLUTION_GENERATIONS
+            n_generations=evolution_generations
         )
         return population, best
 
