@@ -47,15 +47,21 @@ pd.set_option('future.no_silent_downcasting', True)
 
 from deap import base, creator, tools
 
-# 🔑 FinLab API Key
-FINLAB_API_KEY = "YOUR_API_KEY_HERE"  # ← 換成您的 Key
+# 🔑 FinLab API Key (可用環境變數設定)
+FINLAB_API_KEY = os.environ.get('FINLAB_API_KEY', '')
 
 import finlab
-if FINLAB_API_KEY != "YOUR_API_KEY_HERE":
+if FINLAB_API_KEY:
     finlab.login(FINLAB_API_KEY)
     print("✅ FinLab VIP 登入成功")
 else:
-    print("⚠️ 請設定 FINLAB_API_KEY")
+    # 嘗試使用 finlab 已登入的 session
+    try:
+        from finlab import data
+        _ = data.get('price:收盤價')
+        print("✅ 使用已登入的 FinLab session")
+    except:
+        print("⚠️ 請設定 FINLAB_API_KEY 環境變數")
 
 from finlab import data
 from finlab.backtest import sim
