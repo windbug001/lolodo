@@ -478,7 +478,12 @@ def combine_strategies(params: Dict) -> pd.DataFrame:
     # 重新選取前 N 名
     def select_top_n(row):
         """每天選前 N 名，其餘設 0"""
-        valid = row[row > 0].nlargest(actual_n)
+        # 確保是數值型態
+        row_numeric = pd.to_numeric(row, errors='coerce').fillna(0)
+        valid = row_numeric[row_numeric > 0]
+        if len(valid) == 0:
+            return pd.Series(0.0, index=row.index)
+        valid = valid.nlargest(min(actual_n, len(valid)))
         result = pd.Series(0.0, index=row.index)
         if len(valid) > 0:
             # 等權重分配，確保每股 >= 3%
@@ -486,6 +491,8 @@ def combine_strategies(params: Dict) -> pd.DataFrame:
             result[valid.index] = weight
         return result
 
+    # 確保 combined 是數值型態
+    combined = combined.apply(pd.to_numeric, errors='coerce').fillna(0)
     combined = combined[combined > 0]
     if combined.empty:
         return pd.DataFrame()
