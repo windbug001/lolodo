@@ -2,8 +2,8 @@
 # -*- coding: utf-8 -*-
 """
 ================================================================================
-🧬 六組合快快龍 基因演算法優化系統 v12.3 (完整版)
-   統一功能：樣本外測試 + 斷點續傳 Checkpoint
+🧬 六組合快快龍 基因演算法優化系統 v12.5 (完整版)
+   統一功能：樣本外測試 + 斷點續傳 Checkpoint + 月營收換股修正
 ================================================================================
 
 【v12.0 新增功能】
@@ -37,7 +37,16 @@
 ✅ 強制重新評估（使用新適應度函數）
 ✅ 最大回檔限制調整為 17%
 
-版本：v12.4 Full-Featured (2026-01-02)
+【v12.5 新增功能 - 參考小小龍修正月換股】
+✅ 修正 sim() 參數使用小小龍預設值
+   - stop_loss: 15%-35% (之前 5%-20% 太緊)
+   - trail_stop: 20%-50% (之前 3%-13% 太緊)
+   - take_profit: 50%-100%
+   - trade_at_price: high_low_avg
+✅ 所有策略使用 rev.index_str_to_date().index 確保月換股
+✅ 不使用 resample='D'，讓 position index 自然控制換股日期
+
+版本：v12.5 Full-Featured (2026-01-03)
 ================================================================================
 """
 
@@ -152,7 +161,7 @@ OVERFIT_SHARPE_RATIO = 0.6   # 測試期夏普 / 訓練期夏普 < 0.6 則警告
 OVERFIT_RETURN_RATIO = 0.5   # 測試期報酬 / 訓練期報酬 < 0.5 則警告
 
 print(f"{'='*80}")
-print(f"🚀 六組合快快龍 v12.4 (完整版) - Window {WINDOW_ID}")
+print(f"🚀 六組合快快龍 v12.5 (完整版 - 參考小小龍修正月換股) - Window {WINDOW_ID}")
 print(f"   🎯 目標：夏普 >= {TARGET_SHARPE}, 胃納量 >= {MIN_CAPACITY/1e4:.0f}萬")
 print(f"   📉 最大回檔限制：{MAX_DRAWDOWN*100:.0f}%")
 print(f"   🔄 視窗交互：每 {CROSS_WINDOW_INTERVAL} 代交換 Top {CROSS_WINDOW_TOP_N} 基因")
@@ -1013,13 +1022,13 @@ def gene_to_params(gene):
         'top_n': max(3, int(gene[49] * 12 + 3))         # 3 ~ 15
     }
 
-    # === 總體參數 (修正：適用於 [0,1] 基因範圍) ===
+    # === 總體參數 (參考小小龍：使用較寬鬆的停損/停利範圍) ===
     overall_params = {
-        'stop_loss': gene[51] * 0.15 + 0.05,      # 5% ~ 20%
-        'trail_stop': gene[52] * 0.10 + 0.03,     # 3% ~ 13%
-        'take_profit': gene[53] * 0.40 + 0.10,    # 10% ~ 50%
-        'position_limit': gene[54] * 0.20 + 0.20, # 20% ~ 40%
-        'trade_at_price': ["open", "close"][int(gene[55] * 2) % 2],  # 只用 open 或 close
+        'stop_loss': gene[51] * 0.20 + 0.15,      # 15% ~ 35% (參考小小龍)
+        'trail_stop': gene[52] * 0.30 + 0.20,     # 20% ~ 50% (參考小小龍)
+        'take_profit': gene[53] * 0.50 + 0.50,    # 50% ~ 100% (參考小小龍)
+        'position_limit': gene[54] * 0.20 + 0.25, # 25% ~ 45% (參考小小龍)
+        'trade_at_price': "high_low_avg",         # 使用高低價平均（小小龍使用）
         'liquidity_threshold': gene[56] * 5e6 + 1e6,  # 100萬 ~ 600萬
     }
 
@@ -1342,7 +1351,8 @@ def strategy_low_vol(params):
             (std < params['std_threshold'])
         ].is_smallest(params['top_n'])
 
-        position = position.reindex(close.index_str_to_date().index, method='ffill')
+        # 🔥 使用月營收日期進行月換股
+        position = position.reindex(rev.index_str_to_date().index, method='ffill')
         return position.fillna(0).astype(float)
 
     except Exception as e:
@@ -1491,16 +1501,17 @@ def run_backtest(gene, upload=False, name="Strategy"):
         position = position_weight_mgr.normalize_position(position)
 
         # 🔥 修正：不使用 resample，讓 position 的月營收稀疏 index 自然換股
-        # 使用 params 中的 stop_loss/trail_stop/take_profit
+        # 使用 params 中的 stop_loss/trail_stop/take_profit (參考小小龍預設值)
         report = sim(
             position=position,
-            stop_loss=params.get('stop_loss', 0.1),
-            trail_stop=params.get('trail_stop', 0.05),
+            stop_loss=params.get('stop_loss', 0.25),
+            trail_stop=params.get('trail_stop', 0.35),
             fee_ratio=FEE_RATIO,
             tax_ratio=TAX_RATIO,
-            trade_at_price=params.get('trade_at_price', 'close'),
-            position_limit=params.get('position_limit', 0.3),
-            take_profit=params.get('take_profit', 0.3),
+            trade_at_price=params.get('trade_at_price', 'high_low_avg'),
+            position_limit=params.get('position_limit', 0.35),
+            take_profit=params.get('take_profit', 0.70),
+            stop_trading_next_period=False,
             name=name,
             upload=upload
         )
@@ -1543,16 +1554,17 @@ def run_backtest_period(gene, start_date, end_date, name="Strategy"):
         # 🔥 應用 3% 持股約束
         position = position_weight_mgr.normalize_position(position)
 
-        # 🔥 修正：不使用 resample，讓 position 的月營收稀疏 index 自然換股
+        # 🔥 修正：不使用 resample，讓 position 的月營收稀疏 index 自然換股 (參考小小龍預設值)
         report = sim(
             position=position,
-            stop_loss=params.get('stop_loss', 0.1),
-            trail_stop=params.get('trail_stop', 0.05),
+            stop_loss=params.get('stop_loss', 0.25),
+            trail_stop=params.get('trail_stop', 0.35),
             fee_ratio=FEE_RATIO,
             tax_ratio=TAX_RATIO,
-            trade_at_price=params.get('trade_at_price', 'close'),
-            position_limit=params.get('position_limit', 0.3),
-            take_profit=params.get('take_profit', 0.3),
+            trade_at_price=params.get('trade_at_price', 'high_low_avg'),
+            position_limit=params.get('position_limit', 0.35),
+            take_profit=params.get('take_profit', 0.70),
+            stop_trading_next_period=False,
             name=name,
             upload=False
         )
@@ -1628,16 +1640,17 @@ def run_detailed_oos_test(gene, gen):
         # 🔥 應用 3% 持股約束
         train_position = position_weight_mgr.normalize_position(train_position)
 
-        # 🔥 修正：不使用 resample，讓 position 的月營收稀疏 index 自然換股
+        # 🔥 修正：不使用 resample，讓 position 的月營收稀疏 index 自然換股 (參考小小龍預設值)
         train_report = sim(
             position=train_position,
-            stop_loss=params.get('stop_loss', 0.1),
-            trail_stop=params.get('trail_stop', 0.05),
+            stop_loss=params.get('stop_loss', 0.25),
+            trail_stop=params.get('trail_stop', 0.35),
             fee_ratio=FEE_RATIO,
             tax_ratio=TAX_RATIO,
-            trade_at_price=params.get('trade_at_price', 'close'),
-            position_limit=params.get('position_limit', 0.3),
-            take_profit=params.get('take_profit', 0.3),
+            trade_at_price=params.get('trade_at_price', 'high_low_avg'),
+            position_limit=params.get('position_limit', 0.35),
+            take_profit=params.get('take_profit', 0.70),
+            stop_trading_next_period=False,
             upload=False,
             name=f"快快龍_W{WINDOW_ID}_Gen{gen}_訓練期"
         )
@@ -1659,16 +1672,17 @@ def run_detailed_oos_test(gene, gen):
         print(f"📊 第 {gen} 代 - 測試期詳細回測 ({TEST_START[:4]}~{TEST_END[:4]})")
         print(f"{'='*60}")
 
-        # 🔥 修正：不使用 resample，讓 position 的月營收稀疏 index 自然換股
+        # 🔥 修正：不使用 resample，讓 position 的月營收稀疏 index 自然換股 (參考小小龍預設值)
         test_report = sim(
             position=test_position,
-            stop_loss=params.get('stop_loss', 0.1),
-            trail_stop=params.get('trail_stop', 0.05),
+            stop_loss=params.get('stop_loss', 0.25),
+            trail_stop=params.get('trail_stop', 0.35),
             fee_ratio=FEE_RATIO,
             tax_ratio=TAX_RATIO,
-            trade_at_price=params.get('trade_at_price', 'close'),
-            position_limit=params.get('position_limit', 0.3),
-            take_profit=params.get('take_profit', 0.3),
+            trade_at_price=params.get('trade_at_price', 'high_low_avg'),
+            position_limit=params.get('position_limit', 0.35),
+            take_profit=params.get('take_profit', 0.70),
+            stop_trading_next_period=False,
             upload=False,
             name=f"快快龍_W{WINDOW_ID}_Gen{gen}_測試期"
         )
@@ -1744,16 +1758,17 @@ def evaluate_fitness(gene):
         # 🔥 應用 3% 持股約束
         position = position_weight_mgr.normalize_position(position)
 
-        # 🔥 修正：不使用 resample，讓 position 的月營收稀疏 index 自然換股
+        # 🔥 修正：不使用 resample，讓 position 的月營收稀疏 index 自然換股 (參考小小龍預設值)
         report = sim(
             position=position,
-            stop_loss=params.get('stop_loss', 0.1),
-            trail_stop=params.get('trail_stop', 0.05),
+            stop_loss=params.get('stop_loss', 0.25),
+            trail_stop=params.get('trail_stop', 0.35),
             fee_ratio=FEE_RATIO,
             tax_ratio=TAX_RATIO,
-            trade_at_price=params.get('trade_at_price', 'close'),
-            position_limit=params.get('position_limit', 0.3),
-            take_profit=params.get('take_profit', 0.3),
+            trade_at_price=params.get('trade_at_price', 'high_low_avg'),
+            position_limit=params.get('position_limit', 0.35),
+            take_profit=params.get('take_profit', 0.70),
+            stop_trading_next_period=False,
             upload=False,
             name="Eval"
         )
