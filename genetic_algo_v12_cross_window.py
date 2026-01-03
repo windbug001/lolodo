@@ -2886,6 +2886,188 @@ def evaluate_historical_top20():
 EVALUATE_MODE = os.environ.get('EVALUATE_MODE', '').lower() == 'true'
 
 # =============================================================================
+# 🧬 從穩定基因繼續演化
+# =============================================================================
+def get_stable_genes_for_evolution(min_ratio=0.6) -> List[Dict]:
+    """
+    取得穩定的基因作為演化種子
+
+    Args:
+        min_ratio: 最低 測試期/訓練期 夏普比例 (預設 0.6 = 60%)
+
+    Returns:
+        穩定基因列表 (已評估過的)
+    """
+    top20 = historical_top20_mgr.get_top20()
+
+    stable_genes = []
+    for item in top20:
+        train = item.get('train_sharpe')
+        test = item.get('test_sharpe')
+
+        if train and test and train > 0:
+            ratio = test / train
+            if ratio >= min_ratio:
+                stable_genes.append({
+                    'genes': item['genes'],
+                    'sharpe': item.get('sharpe', 0),
+                    'train_sharpe': train,
+                    'test_sharpe': test,
+                    'ratio': ratio,
+                    'stability': '🟢 穩定' if ratio >= 1.0 else '🟡 可接受'
+                })
+
+    # 按測試期夏普排序（最重要的指標）
+    stable_genes.sort(key=lambda x: x['test_sharpe'], reverse=True)
+
+    print(f"\n🧬 找到 {len(stable_genes)} 個穩定基因 (測試/訓練 >= {min_ratio*100:.0f}%)")
+    for i, g in enumerate(stable_genes[:10], 1):
+        print(f"   {i}. 訓練:{g['train_sharpe']:.2f} 測試:{g['test_sharpe']:.2f} "
+              f"({g['ratio']*100:.0f}%) {g['stability']}")
+
+    return stable_genes
+
+def seed_evolution_from_stable_genes(n_generations=50, mutation_boost=1.5):
+    """
+    從穩定基因開始繼續演化
+
+    策略：
+    1. 用穩定基因填滿初始族群的 80%
+    2. 剩餘 20% 隨機生成（維持多樣性）
+    3. 提高突變率加速探索
+    4. 每代都進行 OOS 測試確保穩定性
+
+    Args:
+        n_generations: 繼續演化的代數
+        mutation_boost: 突變率提升倍數
+    """
+    print("\n" + "="*70)
+    print("🧬 從穩定基因開始繼續演化")
+    print("="*70)
+
+    # 取得穩定基因
+    stable_genes = get_stable_genes_for_evolution(min_ratio=0.6)
+
+    if not stable_genes:
+        print("❌ 沒有穩定基因！請先執行 evaluate_historical_top20()")
+        return None, None
+
+    print(f"\n📊 演化策略：")
+    print(f"   • 初始族群: {len(stable_genes)} 個穩定種子 + 隨機個體")
+    print(f"   • 演化代數: {n_generations}")
+    print(f"   • 突變率提升: {mutation_boost}x")
+    print(f"   • 目標: 在測試期找到更好的策略")
+
+    # 修改突變率
+    global MUTATION_RATE
+    original_mutation = MUTATION_RATE
+    MUTATION_RATE = min(0.5, MUTATION_RATE * mutation_boost)
+    print(f"   • 突變率: {original_mutation:.2%} → {MUTATION_RATE:.2%}")
+
+    # 創建初始族群
+    population = toolbox.population(n=POPULATION_SIZE)
+
+    # 注入穩定基因（80%）
+    n_inject = min(len(stable_genes), int(POPULATION_SIZE * 0.8))
+    print(f"\n💉 注入 {n_inject} 個穩定種子...")
+
+    for i, stable in enumerate(stable_genes[:n_inject]):
+        new_ind = creator.Individual(stable['genes'])
+        population[i] = new_ind
+
+    # 評估初始族群
+    print("📊 評估初始族群...")
+    for ind in tqdm(population, desc="評估", ncols=80):
+        ind.fitness.values = toolbox.evaluate(ind)
+
+    # 演化
+    print(f"\n🚀 開始演化 {n_generations} 代...")
+    progress = ProgressTracker(n_generations)
+    progress.start()
+
+    for gen in range(n_generations):
+        offspring = toolbox.select(population, len(population))
+        offspring = list(map(toolbox.clone, offspring))
+
+        for c1, c2 in zip(offspring[::2], offspring[1::2]):
+            if random.random() < CROSSOVER_RATE:
+                toolbox.mate(c1, c2)
+                del c1.fitness.values
+                del c2.fitness.values
+
+        for mutant in offspring:
+            if random.random() < MUTATION_RATE:
+                toolbox.mutate(mutant)
+                del mutant.fitness.values
+
+        invalid = [ind for ind in offspring if not ind.fitness.valid]
+        for ind in invalid:
+            ind.fitness.values = toolbox.evaluate(ind)
+
+        # 精英保留
+        n_elite = max(2, int(POPULATION_SIZE * ELITE_RATIO))
+        elites = tools.selBest(population, n_elite)
+        population = elites + tools.selBest(offspring, POPULATION_SIZE - n_elite)
+
+        best_ind = tools.selBest(population, 1)[0]
+        best_fitness = best_ind.fitness.values[0]
+
+        stats = {'best_fitness': best_fitness}
+        progress.update(gen, stats)
+
+        # 每 10 代做詳細 OOS 測試
+        if (gen + 1) % 10 == 0:
+            print(f"\n📊 第 {gen+1} 代 - 詳細測試...")
+            oos_result = run_oos_test(best_ind, name=f"Gen{gen+1}_Best")
+
+            if oos_result:
+                train_s = oos_result['train']['sharpe']
+                test_s = oos_result['test']['sharpe']
+                ratio = test_s / train_s if train_s > 0 else 0
+
+                stability = "🟢 穩定" if ratio >= 1.0 else ("🟡 可接受" if ratio >= 0.6 else "🔴 過擬合")
+                print(f"   訓練:{train_s:.2f} / 測試:{test_s:.2f} = {ratio*100:.1f}% {stability}")
+
+                # 更新歷史前20
+                if test_s >= 2.0 and ratio >= 0.6:
+                    historical_top20_mgr.update(
+                        genes=list(best_ind),
+                        sharpe=best_fitness,
+                        train_sharpe=train_s,
+                        test_sharpe=test_s,
+                        generation=gen + 1,
+                        metadata={'source': 'stable_evolution'}
+                    )
+
+    progress.pbar.close()
+
+    # 恢復原始突變率
+    MUTATION_RATE = original_mutation
+
+    # 最終結果
+    final_best = tools.selBest(population, 1)[0]
+    print(f"\n🏆 演化完成！")
+    print(f"   最佳適應度: {final_best.fitness.values[0]:.4f}")
+
+    # 最終 OOS 測試
+    final_oos = run_oos_test(final_best, name="最終最佳")
+    if final_oos:
+        train_s = final_oos['train']['sharpe']
+        test_s = final_oos['test']['sharpe']
+        ratio = test_s / train_s if train_s > 0 else 0
+        print(f"   訓練期夏普: {train_s:.4f}")
+        print(f"   測試期夏普: {test_s:.4f}")
+        print(f"   穩定性: {ratio*100:.1f}%")
+
+    historical_top20_mgr.print_summary()
+
+    return population, final_best
+
+# 環境變數：繼續演化模式
+CONTINUE_EVOLUTION = os.environ.get('CONTINUE_EVOLUTION', '').lower() == 'true'
+EVOLUTION_GENERATIONS = int(os.environ.get('EVOLUTION_GENERATIONS', '50'))
+
+# =============================================================================
 # 主程式
 # =============================================================================
 def main():
@@ -2894,6 +3076,14 @@ def main():
         print("🔬 評估模式啟動...")
         results = evaluate_historical_top20()
         return None, results
+
+    # 🧬 繼續演化模式：從穩定基因繼續演化
+    if CONTINUE_EVOLUTION:
+        print("🧬 繼續演化模式啟動...")
+        population, best = seed_evolution_from_stable_genes(
+            n_generations=EVOLUTION_GENERATIONS
+        )
+        return population, best
 
     print(f"""
 ╔════════════════════════════════════════════════════════════════════════════╗
