@@ -2264,16 +2264,24 @@ creator.create("FitnessMax", base.Fitness, weights=(1.0,))
 creator.create("Individual", list, fitness=creator.FitnessMax)
 
 GENE_LENGTH = 160
+
+# 🔥 unbounded 基因格式的邊界設定
+# 根據 gene_to_params 的實際使用範圍：
+# - 大多數參數用 gene[i]/100 或 gene[i]/1000，所以值在 0-1000 內
+# - 有些用 gene[i] * 1000，所以需要更大範圍
+GENE_LOW = -500.0    # 允許負值（某些參數可能需要）
+GENE_HIGH = 500.0    # 最大值
+
 toolbox = base.Toolbox()
-toolbox.register("attr_float", random.random)
+toolbox.register("attr_float", random.uniform, GENE_LOW, GENE_HIGH)  # 🔥 改用更大範圍
 toolbox.register("individual", tools.initRepeat, creator.Individual, toolbox.attr_float, n=GENE_LENGTH)
 toolbox.register("population", tools.initRepeat, list, toolbox.individual)
 toolbox.register("evaluate", evaluate_fitness)
-toolbox.register("mate", tools.cxSimulatedBinaryBounded, low=0.0, up=1.0, eta=20.0)
-toolbox.register("mutate", tools.mutPolynomialBounded, low=0.0, up=1.0, eta=20.0, indpb=0.1)
+toolbox.register("mate", tools.cxSimulatedBinaryBounded, low=GENE_LOW, up=GENE_HIGH, eta=20.0)  # 🔥 擴大邊界
+toolbox.register("mutate", tools.mutPolynomialBounded, low=GENE_LOW, up=GENE_HIGH, eta=20.0, indpb=0.1)  # 🔥 擴大邊界
 toolbox.register("select", tools.selTournament, tournsize=3)
 
-print("✅ DEAP GA 配置完成")
+print("✅ DEAP GA 配置完成 (unbounded 格式, 範圍: [{}, {}])".format(GENE_LOW, GENE_HIGH))
 
 # =============================================================================
 # 歷史精英載入
