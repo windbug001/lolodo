@@ -2621,9 +2621,156 @@ class EvolutionEngine:
             traceback.print_exc()
 
 # =============================================================================
+# 🔬 歷史前20 訓練期 vs 測試期 評估功能 (v12.6 新增)
+# =============================================================================
+def evaluate_historical_top20():
+    """
+    評估歷史前20的訓練期 vs 測試期表現
+    找出穩定（非過擬合）的策略
+    """
+    print(f"""
+╔════════════════════════════════════════════════════════════════════════════╗
+║      🔬 歷史前20 訓練期 vs 測試期 評估                                        ║
+╠════════════════════════════════════════════════════════════════════════════╣
+║  📊 訓練期：{TRAIN_START} ~ {TRAIN_END}                                    ║
+║  🔬 測試期：{TEST_START} ~ {TEST_END}                                      ║
+║  ⚠️  過擬合警告：測試期/訓練期 < {OVERFIT_SHARPE_RATIO*100:.0f}%                              ║
+╚════════════════════════════════════════════════════════════════════════════╝
+    """)
+
+    top20 = historical_top20_mgr.get_top20()
+
+    if not top20:
+        print("❌ 沒有歷史前20數據可評估")
+        print("   請先執行演化或匯入優秀基因")
+        return []
+
+    print(f"📊 載入 {len(top20)} 個歷史最佳基因")
+    print("=" * 90)
+
+    results = []
+
+    for i, item in enumerate(top20[:20], 1):
+        genes = item['genes']
+        original_sharpe = item.get('sharpe', 0)
+
+        print(f"\n🧬 評估第 {i}/20 個基因 (原始夏普: {original_sharpe:.4f})...")
+
+        try:
+            # 執行樣本外測試
+            oos_result = run_oos_test(genes, name=f"歷史最佳_{i}")
+
+            if oos_result:
+                result_entry = {
+                    'rank': i,
+                    'original_sharpe': original_sharpe,
+                    'train_sharpe': oos_result['train_sharpe'],
+                    'test_sharpe': oos_result['test_sharpe'],
+                    'sharpe_ratio': oos_result['sharpe_ratio'],
+                    'is_overfit': oos_result['is_overfit'],
+                    'genes': genes
+                }
+                results.append(result_entry)
+
+                # 更新歷史前20的訓練期/測試期資訊
+                historical_top20_mgr.update(
+                    genes=genes,
+                    sharpe=original_sharpe,
+                    train_sharpe=oos_result['train_sharpe'],
+                    test_sharpe=oos_result['test_sharpe']
+                )
+
+                status = "🟢 穩定" if not oos_result['is_overfit'] else "🔴 過擬合"
+                print(f"   結果: 訓練 {oos_result['train_sharpe']:.3f} / 測試 {oos_result['test_sharpe']:.3f} = {oos_result['sharpe_ratio']*100:.1f}% {status}")
+            else:
+                print(f"   ⚠️ 評估失敗")
+
+        except Exception as e:
+            print(f"   ❌ 錯誤: {e}")
+
+    # 列印彙總結果
+    print("\n" + "=" * 95)
+    print("🏆 歷史前20 訓練期 vs 測試期 評估結果彙總")
+    print("=" * 95)
+    print(f"{'排名':<5} {'原始夏普':<12} {'訓練期':<12} {'測試期':<12} {'比率':<10} {'狀態':<12}")
+    print("-" * 95)
+
+    for r in sorted(results, key=lambda x: x['test_sharpe'], reverse=True):
+        status = "🟢 穩定" if not r['is_overfit'] else "🔴 過擬合"
+        ratio_str = f"{r['sharpe_ratio']*100:.1f}%"
+        print(f"{r['rank']:<5} {r['original_sharpe']:<12.4f} {r['train_sharpe']:<12.4f} {r['test_sharpe']:<12.4f} {ratio_str:<10} {status}")
+
+    # 統計分析
+    stable_results = [r for r in results if not r['is_overfit']]
+    overfit_results = [r for r in results if r['is_overfit']]
+
+    print("\n" + "=" * 95)
+    print("📊 統計分析")
+    print("=" * 95)
+    print(f"✅ 穩定策略: {len(stable_results)}/{len(results)}")
+    print(f"🔴 過擬合策略: {len(overfit_results)}/{len(results)}")
+
+    if stable_results:
+        # 按測試期夏普排序
+        stable_results.sort(key=lambda x: x['test_sharpe'], reverse=True)
+        best_stable = stable_results[0]
+
+        print(f"\n🏆 最佳穩定策略:")
+        print(f"   排名: {best_stable['rank']}")
+        print(f"   訓練期夏普: {best_stable['train_sharpe']:.4f}")
+        print(f"   測試期夏普: {best_stable['test_sharpe']:.4f}")
+        print(f"   穩定度: {best_stable['sharpe_ratio']*100:.1f}%")
+
+        # 保存最佳穩定策略
+        best_stable_path = f"{WINDOW_DIR}/best_stable_gene.pkl"
+        best_stable_data = {
+            'genes': best_stable['genes'],
+            'train_sharpe': best_stable['train_sharpe'],
+            'test_sharpe': best_stable['test_sharpe'],
+            'sharpe_ratio': best_stable['sharpe_ratio'],
+            'timestamp': datetime.now().isoformat()
+        }
+        SafeFileManager.safe_pickle_save(best_stable_data, best_stable_path)
+        print(f"\n💾 最佳穩定策略已保存: {best_stable_path}")
+
+        # Discord 通知
+        notifier.send_embed(
+            f"🔬 歷史前20評估完成 - 視窗 {WINDOW_ID}",
+            f"穩定策略: {len(stable_results)}/{len(results)}\n"
+            f"最佳測試期夏普: {best_stable['test_sharpe']:.4f}\n"
+            f"穩定度: {best_stable['sharpe_ratio']*100:.1f}%",
+            'success' if len(stable_results) > len(results) // 2 else 'warning'
+        )
+
+    else:
+        print("\n⚠️ 沒有找到穩定的策略，所有策略都有過擬合風險")
+        print("   建議：繼續演化以找到更穩定的參數組合")
+
+        notifier.send_embed(
+            f"⚠️ 歷史前20評估完成 - 視窗 {WINDOW_ID}",
+            f"警告：所有 {len(results)} 個策略都有過擬合風險\n"
+            f"建議繼續演化尋找更穩定的參數",
+            'warning'
+        )
+
+    # 更新歷史前20摘要
+    historical_top20_mgr.print_summary()
+
+    return results
+
+# 評估模式環境變數
+EVALUATE_MODE = os.environ.get('EVALUATE_MODE', '').lower() == 'true'
+
+# =============================================================================
 # 主程式
 # =============================================================================
 def main():
+    # 🔬 評估模式：只評估歷史前20，不演化
+    if EVALUATE_MODE:
+        print("🔬 評估模式啟動...")
+        results = evaluate_historical_top20()
+        return None, results
+
     print(f"""
 ╔════════════════════════════════════════════════════════════════════════════╗
 ║      六組合快快龍 基因演算法 v12.6 (歷史前20保留版)                            ║
