@@ -1311,17 +1311,13 @@ def auto_convert_gene(gene):
     return gene
 
 # =============================================================================
-# gene_to_params (v12.6 - 參考備份程式修正參數範圍)
+# gene_to_params (原始 unbounded 格式 - 與備份程式相容)
 # =============================================================================
 def gene_to_params(gene):
     """
-    將基因轉換為策略參數 (v12.6 - 參考備份程式修正)
+    將基因轉換為策略參數 (原始 unbounded 格式)
 
-    重要修正：
-    1. volatility_threshold 範圍擴大到 0.01-0.15 (備份程式使用)
-    2. rev_ma3_ma12_ratio 範圍擴大到 0.8-1.8
-    3. 營收相關閾值使用負數（排除衰退）
-    4. stop_loss 範圍擴大到 0.15-0.60
+    這是備份程式的原始格式，直接使用 gene 值，不做 [0,1] 縮放
     """
     if not isinstance(gene, list):
         gene = list(gene)
@@ -1330,130 +1326,121 @@ def gene_to_params(gene):
     current_length = len(gene)
 
     if current_length < required_length:
-        extension = [0.5] * (required_length - current_length)  # 用 0.5 而非 0.0
+        extension = [0.0] * (required_length - current_length)
         gene = gene + extension
     elif current_length > required_length:
         gene = gene[:required_length]
 
-    # === 策略配置權重 (gene[0:6]) ===
     alloc_sum = sum(gene[0:6])
     if alloc_sum == 0:
         allocation = [1/6] * 6
     else:
         allocation = [gene[i]/alloc_sum for i in range(6)]
 
-    # === 策略1: 低波動本益比策略參數 (參考備份程式範圍) ===
     low_vol_pe_params = {
-        'rev_ma3_ma12_ratio': gene[6] * 1.0 + 0.8,       # 0.8 ~ 1.8 (備份: 0.8-1.8)
-        'rev_consistency': gene[7] * 0.6 + 0.6,          # 0.6 ~ 1.2 (備份: 0.6-1.2)
-        'volatility_threshold': gene[8] * 0.14 + 0.01,   # 1% ~ 15% (備份: 0.01-0.15) ← 關鍵修正！
-        'margin_usage_limit': gene[9] * 35 + 10,         # 10 ~ 45 (備份: 10-45)
-        'non_op_income_limit': gene[10] * 13 + 2,        # 2 ~ 15 (備份: 2-15)
-        'min_volume': gene[11] * 320 + 30,               # 30 ~ 350 張 (備份: 30-350)
-        'pe_min': gene[12] * 7 + 3,                      # 3 ~ 10 (備份: 3-10)
-        'pe_max': gene[13] * 20 + 20,                    # 20 ~ 40 (備份: 20-40)
-        'top_n': max(2, int(gene[14] * 10 + 2)),         # 2 ~ 12 (備份: 2-12)
-        # 營收相關閾值使用負數（排除衰退）
-        'min_rev_yoy_threshold': -(gene[120] * 20 + 20), # -20% ~ -40% (排除衰退)
-        'rev_decline_period': max(2, int(gene[121] * 2 + 2)),  # 2 ~ 4
-        'max_rev_yoy_threshold': gene[122] * 40 + 25,    # 25% ~ 65%
-        'old_trend_period': max(10, int(gene[123] * 4 + 10)),  # 10 ~ 14
-        'old_trend_match': max(7, int(gene[124] * 3 + 7)),     # 7 ~ 10
-        'rev_bottom_window': max(9, int(gene[125] * 6 + 9)),   # 9 ~ 15
-        'rev_bottom_ratio': gene[126] * 0.2 + 0.7,       # 0.7 ~ 0.9 (備份用)
-        'rev_bottom_sustain': max(2, int(gene[127] * 2 + 2)),  # 2 ~ 4
-        'min_rev_mom_growth': -(gene[128] * 25 + 40),    # -40% ~ -65% (排除衰退)
-        'rev_mom_sustain': max(2, int(gene[129] * 2 + 2)),     # 2 ~ 4
-        'quarter_ma': max(60, int(gene[130] * 30 + 60)),       # 60 ~ 90 (備份: 60-90)
-        'half_year_ma': max(30, int(gene[131] * 20 + 30)),     # 30 ~ 50 (備份: 30-50)
-        'long_ma': max(80, int(gene[132] * 40 + 80)),          # 80 ~ 120 (備份: 80-120)
-        'recent_rev_period': max(3, int(gene[133] * 2 + 3)),   # 3 ~ 5 (備份: 3-5)
-        'annual_rev_period': max(10, int(gene[134] * 4 + 10)), # 10 ~ 14 (備份: 10-14)
-        'pb_min': gene[135] * 0.2 + 0.4,                 # 0.4 ~ 0.6 (備份: 0.4-0.6)
-        'pb_max': gene[136] * 0.7 + 2.5,                 # 2.5 ~ 3.2 (備份: 2.5-3.2)
-        'min_gpm': gene[137] * 4 + 6,                    # 6% ~ 10% (備份: 6-10)
-        'gpm_sustain_period': max(1, int(gene[138] * 2 + 1)),  # 1 ~ 3 (備份: 1-3)
-        'min_roe': gene[139] * 1.0 - 0.5,                # -0.5% ~ 0.5% (備份: -0.5-0.5)
-        'roe_sustain_period': max(1, int(gene[140] * 2 + 1))   # 1 ~ 3 (備份: 1-3)
+        'rev_ma3_ma12_ratio': gene[6],
+        'rev_consistency': gene[7],
+        'volatility_threshold': gene[8]/1000,
+        'margin_usage_limit': gene[9],
+        'non_op_income_limit': gene[10],
+        'min_volume': abs(gene[11] * 1000),
+        'pe_min': gene[12],
+        'pe_max': gene[13],
+        'top_n': max(1, int(gene[14])),
+        'min_rev_yoy_threshold': -gene[120],
+        'rev_decline_period': max(1, int(gene[121])),
+        'max_rev_yoy_threshold': gene[122],
+        'old_trend_period': max(1, int(gene[123])),
+        'old_trend_match': max(1, int(gene[124])),
+        'rev_bottom_window': max(1, int(gene[125])),
+        'rev_bottom_ratio': gene[126],
+        'rev_bottom_sustain': max(1, int(gene[127])),
+        'min_rev_mom_growth': -gene[128],
+        'rev_mom_sustain': max(1, int(gene[129])),
+        'quarter_ma': max(1, int(gene[130])),
+        'half_year_ma': max(1, int(gene[131])),
+        'long_ma': max(1, int(gene[132])),
+        'recent_rev_period': max(1, int(gene[133])),
+        'annual_rev_period': max(1, int(gene[134])),
+        'pb_min': gene[135],
+        'pb_max': gene[136],
+        'min_gpm': gene[137],
+        'gpm_sustain_period': max(1, int(gene[138])),
+        'min_roe': gene[139],
+        'roe_sustain_period': max(1, int(gene[140]))
     }
 
-    # === 策略2: 小資族策略參數 (參考備份程式範圍) ===
     small_inv_params = {
-        'market_value_limit': gene[15] * 25e9 + 5e9,     # 50億 ~ 300億 (備份: 5-30 * 1e9)
-        'market_rev_ratio_limit': gene[16] * 4 + 1,      # 1 ~ 5 (備份: 1-5)
-        'rev_yoy_growth_limit': -(gene[17] * 22 + 3),    # -3% ~ -25% (負數，排除衰退)
-        'rev_mom_growth_limit': -(gene[18] * 45 + 35),   # -35% ~ -80% (負數，排除衰退)
-        'rsv_period': max(30, int(gene[19] * 70 + 30)),  # 30 ~ 100 (備份: 30-100)
-        'ma_period': max(35, int(gene[20] * 145 + 35)),  # 35 ~ 180 (備份: 35-180)
-        'volume_threshold': gene[21] * 400 + 50,         # 50 ~ 450 張 (備份: 50-450)
-        'top_n': max(2, int(gene[22] * 10 + 2)),         # 2 ~ 12 (備份: 2-12)
-        'min_free_cash_flow': gene[150] * 2e6 - 1e6,     # -1M ~ 1M (備份: -1e6 to 1e6)
-        'min_roe': gene[151] * 1.0 - 0.5,                # -0.5% ~ 0.5% (備份: -0.5-0.5)
-        'min_op_profit_growth': gene[152] * 1.0 - 1.5    # -1.5% ~ -0.5% (備份: -1.5 to -0.5)
+        'market_value_limit': gene[15] * 1e9,
+        'market_rev_ratio_limit': gene[16],
+        'rev_yoy_growth_limit': -gene[17],
+        'rev_mom_growth_limit': -gene[18],
+        'rsv_period': max(1, int(gene[19])),
+        'ma_period': max(1, int(gene[20])),
+        'volume_threshold': abs(gene[21] * 1000),
+        'top_n': max(1, int(gene[22])),
+        'min_free_cash_flow': gene[150],
+        'min_roe': gene[151],
+        'min_op_profit_growth': gene[152]
     }
 
-    # === 策略3: 營收股價雙渦輪策略參數 (參考備份程式範圍) ===
     turbo_params = {
-        'rev_ma_period': max(1, int(gene[23] * 7 + 1)),  # 1 ~ 8 (備份: 1-8)
-        'rev_ma_lookback': max(9, int(gene[24] * 27 + 9)),  # 9 ~ 36 (備份: 9-36)
-        'price_high_window': max(2, int(gene[25] * 18 + 2)),  # 2 ~ 20 (備份: 2-20)
-        'min_volume': gene[26] * 500 + 100,              # 100 ~ 600 張 (備份: 100-600)
-        'min_price': gene[27] * 30 + 5,                  # 5 ~ 35 元 (備份: 5-35)
-        'rsi_threshold': gene[28] * 50 + 30,             # 30 ~ 80 (備份: 30-80)
-        'pe_limit': gene[29] * 230 + 120,                # 120 ~ 350 (備份: 120-350) 排除高PE
-        'top_n': max(2, int(gene[30] * 10 + 2)),         # 2 ~ 12 (備份: 2-12)
-        'performance_ma_period': max(200, int(gene[100] * 100 + 200)),  # 200 ~ 300 (備份: 200-300)
-        'performance_threshold': gene[101] * 0.15 + 1.05, # 1.05 ~ 1.2 (備份: 1.05-1.2)
-        'rsi_trend_period': max(1, int(gene[102] * 2 + 1)),  # 1 ~ 3 (備份: 1-3)
-        'min_gpm': gene[103] * 5 + 3,                    # 3% ~ 8% (備份: 3-8)
-        'gpm_sustain_period': max(3, int(gene[104] * 3 + 3)),  # 3 ~ 6 (備份: 3-6)
-        'min_btpm': gene[105] * 4 + 2,                   # 2% ~ 6% (備份: 2-6)
-        'btpm_sustain_period': max(1, int(gene[106] * 2 + 1)),  # 1 ~ 3 (備份: 1-3)
-        'min_atpm': gene[107] * 3 + 2,                   # 2% ~ 5% (備份: 2-5)
-        'atpm_sustain_period': max(1, int(gene[108] * 2 + 1)),  # 1 ~ 3 (備份: 1-3)
-        'rev_growth_percentile': gene[109] * 0.10 + 0.85, # 0.85 ~ 0.95 (備份: 0.85-0.95)
-        'boss_min_level': max(10, int(gene[110] * 4 + 10)),   # 10 ~ 14 (備份: 10-14)
-        'boss_max_level': max(15, int(gene[111] * 3 + 15)),   # 15 ~ 18 (備份: 15-18)
-        'min_boss_ratio': gene[112] * 10 + 15            # 15% ~ 25% (備份: 15-25)
+        'rev_ma_period': max(1, int(gene[23])),
+        'rev_ma_lookback': max(1, int(gene[24])),
+        'price_high_window': max(1, int(gene[25])),
+        'min_volume': abs(gene[26] * 1000),
+        'min_price': gene[27],
+        'rsi_threshold': gene[28],
+        'pe_limit': gene[29],
+        'top_n': max(1, int(gene[30])),
+        'performance_ma_period': max(1, int(gene[100])),
+        'performance_threshold': gene[101],
+        'rsi_trend_period': max(1, int(gene[102])),
+        'min_gpm': gene[103],
+        'gpm_sustain_period': max(1, int(gene[104])),
+        'min_btpm': gene[105],
+        'btpm_sustain_period': max(1, int(gene[106])),
+        'min_atpm': gene[107],
+        'atpm_sustain_period': max(1, int(gene[108])),
+        'rev_growth_percentile': gene[109],
+        'boss_min_level': max(1, int(gene[110])),
+        'boss_max_level': max(1, int(gene[111])),
+        'min_boss_ratio': gene[112]
     }
 
-    # === 策略4: 高殖利率烏龜策略參數 (參考備份程式範圍) ===
     high_yield_turtle_params = {
-        'min_yield_ratio': gene[31] * 3 + 5,             # 5% ~ 8% (備份: 5-8)
-        'min_op_earn_ratio': gene[32] * 7 + 3,           # 3% ~ 10% (備份: 3-10)
-        'min_boss_hold': gene[33] * 20 + 10,             # 10% ~ 30% (備份: 10-30)
-        'min_volume': gene[34] * 450 + 50,               # 50 ~ 500 張 (備份: 50-500)
-        'max_volume': gene[35] * 10000 + 5000,           # 5000 ~ 15000 張 (備份: 5000-15000)
-        'top_n': max(2, int(gene[36] * 10 + 2))          # 2 ~ 12 (備份: 2-12)
+        'min_yield_ratio': gene[31],
+        'min_op_earn_ratio': gene[32],
+        'min_boss_hold': gene[33],
+        'min_volume': gene[34] * 1000,
+        'max_volume': gene[35] * 1000,
+        'top_n': max(1, int(gene[36]))
     }
 
-    # === 策略5: 低波動性指標策略參數 (參考備份程式範圍) ===
     low_vol_index_params = {
-        'min_volume': gene[37] * 600 + 200,              # 200 ~ 800 張 (備份: 200-800)
-        'std_window': max(40, int(gene[38] * 40 + 40)),  # 40 ~ 80 (備份: 40-80)
-        'std_threshold': gene[39] * 0.4 + 0.4,           # 0.4 ~ 0.8 (備份: 0.4-0.8)
-        'top_n': max(3, int(gene[40] * 9 + 3))           # 3 ~ 12 (備份: 3-12)
+        'min_volume': gene[37] * 1000,
+        'std_window': max(1, int(gene[38])),
+        'std_threshold': gene[39],
+        'top_n': max(1, int(gene[40]))
     }
 
-    # === 策略6: 藏獒外掛大盤指針策略參數 (參考備份程式範圍) ===
     market_indicator_params = {
-        'new_high_window': max(200, int(gene[43] * 100 + 200)),  # 200 ~ 300 (備份: 200-300)
-        'min_year_growth': -(gene[44] * 10 + 10),        # -10% ~ -20% (負數，排除衰退)
-        'max_year_growth': gene[45] * 30 + 50,           # 50% ~ 80% (備份: 50-80)
-        'rev_bottom_ratio': gene[46] * 0.3 + 0.6,        # 0.6 ~ 0.9 (備份: 0.6-0.9)
-        'min_month_growth': -(gene[47] * 20 + 30),       # -30% ~ -50% (負數，排除衰退)
-        'min_volume': gene[48] * 300 + 200,              # 200 ~ 500 張 (備份: 200-500)
-        'top_n': max(1, int(gene[49] * 11 + 1))          # 1 ~ 12 (備份: 1-12)
+        'new_high_window': max(1, int(gene[43])),
+        'min_year_growth': -gene[44],
+        'max_year_growth': gene[45],
+        'rev_bottom_ratio': gene[46],
+        'min_month_growth': -gene[47],
+        'min_volume': gene[48] * 1000,
+        'top_n': max(1, int(gene[49]))
     }
 
-    # === 總體參數 (參考備份程式範圍) ===
     overall_params = {
-        'stop_loss': gene[51] * 0.45 + 0.15,       # 15% ~ 60% (備份: 15-60)
-        'trail_stop': gene[52] * 0.35 + 0.15,      # 15% ~ 50% (備份: 15-50)
-        'take_profit': gene[53] * 0.70 + 0.30,     # 30% ~ 100% (備份: 30-100)
-        'position_limit': gene[54] * 0.90 + 0.10,  # 10% ~ 100% (備份: 10-100)
-        'trade_at_price': ["open", "close", "high_low_avg", "open_close_avg"][int(gene[55] * 4) % 4],
-        'liquidity_threshold': gene[56] * 32e6 + 3e6,  # 300萬 ~ 3500萬 (備份: 3-35 * 1e6)
+        'stop_loss': gene[51]/100,
+        'trail_stop': gene[52]/100,
+        'take_profit': gene[53]/100,
+        'position_limit': gene[54]/100,
+        'trade_at_price': ["open", "close", "high_low_avg", "open_close_avg"][int(gene[55]) % 4],
+        'liquidity_threshold': gene[56] * 1e6,
     }
 
     return allocation, low_vol_pe_params, small_inv_params, turbo_params, high_yield_turtle_params, low_vol_index_params, market_indicator_params, overall_params
@@ -2789,11 +2776,9 @@ def evaluate_historical_top20():
         print(f"\n🧬 評估第 {i}/20 個基因 (原始夏普: {original_sharpe:.4f})...")
 
         try:
-            # 🔄 自動偵測並轉換基因格式
-            converted_genes = auto_convert_gene(genes)
-
+            # 直接使用原始基因（unbounded 格式，與備份程式相容）
             # 執行樣本外測試
-            oos_result = run_oos_test(converted_genes, name=f"歷史最佳_{i}")
+            oos_result = run_oos_test(genes, name=f"歷史最佳_{i}")
 
             if oos_result:
                 # 🔧 修正：正確存取 train/test 結構
@@ -2807,13 +2792,13 @@ def evaluate_historical_top20():
                     'test_sharpe': test_sharpe,
                     'sharpe_ratio': oos_result['sharpe_ratio'],
                     'is_overfit': oos_result['is_overfit'],
-                    'genes': converted_genes  # 使用轉換後的基因
+                    'genes': genes  # 使用原始基因
                 }
                 results.append(result_entry)
 
                 # 更新歷史前20的訓練期/測試期資訊
                 historical_top20_mgr.update(
-                    genes=converted_genes,
+                    genes=genes,
                     sharpe=original_sharpe,
                     train_sharpe=train_sharpe,
                     test_sharpe=test_sharpe
