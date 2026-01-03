@@ -698,6 +698,194 @@ class CheckpointManager:
 checkpoint_mgr = None
 
 # =============================================================================
+# 🏆 歷史最佳前20管理器 (v12.6 新增)
+# =============================================================================
+class HistoricalTop20Manager:
+    """
+    歷史最佳前20管理器
+    - 自動維護歷史上最佳的20個基因組合
+    - 按夏普值排序，保留前20
+    - 持久化存儲，跨重啟保持
+    """
+
+    def __init__(self, base_dir: str, window_id: int = None):
+        self.base_dir = base_dir
+        self.window_id = window_id
+
+        # 歷史最佳保存路徑（共享給所有視窗）
+        self.shared_top20_file = f"{base_dir}/historical_top20.pkl"
+        # 視窗專屬歷史
+        if window_id:
+            self.window_top20_file = f"{base_dir}/window_{window_id}/historical_top20.pkl"
+        else:
+            self.window_top20_file = None
+
+        # 載入現有歷史
+        self.top20 = self._load()
+
+    def _load(self) -> List[Dict]:
+        """載入歷史前20"""
+        top20 = []
+
+        # 先嘗試載入共享的
+        if os.path.exists(self.shared_top20_file):
+            try:
+                with open(self.shared_top20_file, 'rb') as f:
+                    top20 = pickle.load(f)
+                print(f"📂 載入共享歷史前20: {len(top20)} 個")
+            except:
+                pass
+
+        # 再嘗試載入視窗專屬的
+        if self.window_top20_file and os.path.exists(self.window_top20_file):
+            try:
+                with open(self.window_top20_file, 'rb') as f:
+                    window_top20 = pickle.load(f)
+                # 合併並去重
+                existing_hashes = {self._gene_hash(x['genes']) for x in top20}
+                for item in window_top20:
+                    h = self._gene_hash(item['genes'])
+                    if h not in existing_hashes:
+                        top20.append(item)
+                        existing_hashes.add(h)
+            except:
+                pass
+
+        # 排序並保留前20
+        top20.sort(key=lambda x: x.get('sharpe', x.get('fitness', 0)), reverse=True)
+        return top20[:20]
+
+    def _gene_hash(self, genes: List) -> str:
+        """計算基因的雜湊值（用於去重）"""
+        return hashlib.md5(str(genes).encode()).hexdigest()
+
+    def update(self, genes: List, sharpe: float, fitness: float = None,
+               train_sharpe: float = None, test_sharpe: float = None,
+               generation: int = None, metadata: Dict = None):
+        """
+        嘗試將新基因加入歷史前20
+
+        Args:
+            genes: 基因列表
+            sharpe: 夏普值
+            fitness: 適應度值
+            train_sharpe: 訓練期夏普
+            test_sharpe: 測試期夏普
+            generation: 世代
+            metadata: 其他資訊
+        """
+        gene_hash = self._gene_hash(genes)
+
+        # 檢查是否已存在
+        for i, item in enumerate(self.top20):
+            if self._gene_hash(item['genes']) == gene_hash:
+                # 更新現有記錄
+                self.top20[i]['sharpe'] = max(item.get('sharpe', 0), sharpe)
+                self.top20[i]['updated_at'] = datetime.now().isoformat()
+                return
+
+        # 新記錄
+        new_entry = {
+            'genes': list(genes),
+            'sharpe': sharpe,
+            'fitness': fitness or sharpe,
+            'train_sharpe': train_sharpe,
+            'test_sharpe': test_sharpe,
+            'generation': generation,
+            'window_id': self.window_id,
+            'created_at': datetime.now().isoformat(),
+            'metadata': metadata or {}
+        }
+
+        # 加入並排序
+        self.top20.append(new_entry)
+        self.top20.sort(key=lambda x: x.get('sharpe', 0), reverse=True)
+
+        # 只保留前20
+        self.top20 = self.top20[:20]
+
+        # 保存
+        self._save()
+
+    def _save(self):
+        """保存歷史前20"""
+        try:
+            # 保存到共享區
+            SafeFileManager.safe_pickle_save(self.top20, self.shared_top20_file)
+
+            # 保存到視窗專屬
+            if self.window_top20_file:
+                Path(os.path.dirname(self.window_top20_file)).mkdir(parents=True, exist_ok=True)
+                SafeFileManager.safe_pickle_save(self.top20, self.window_top20_file)
+
+        except Exception as e:
+            print(f"⚠️ 保存歷史前20失敗: {e}")
+
+    def get_top20(self) -> List[Dict]:
+        """取得歷史前20"""
+        return self.top20
+
+    def get_best(self) -> Optional[Dict]:
+        """取得歷史最佳"""
+        return self.top20[0] if self.top20 else None
+
+    def print_summary(self):
+        """列印摘要"""
+        if not self.top20:
+            print("📊 歷史前20: (空)")
+            return
+
+        print(f"\n{'='*70}")
+        print(f"🏆 歷史最佳前20 (共 {len(self.top20)} 個)")
+        print(f"{'='*70}")
+        print(f"{'排名':<4} {'夏普值':<10} {'訓練期':<10} {'測試期':<10} {'視窗':<6} {'建立時間':<20}")
+        print(f"{'-'*70}")
+
+        for i, item in enumerate(self.top20[:20], 1):
+            sharpe = item.get('sharpe', 0)
+            train = item.get('train_sharpe', '-')
+            test = item.get('test_sharpe', '-')
+            window = item.get('window_id', '-')
+            created = item.get('created_at', '-')[:16] if item.get('created_at') else '-'
+
+            train_str = f"{train:.2f}" if isinstance(train, (int, float)) else str(train)
+            test_str = f"{test:.2f}" if isinstance(test, (int, float)) else str(test)
+
+            print(f"{i:<4} {sharpe:<10.4f} {train_str:<10} {test_str:<10} {window:<6} {created:<20}")
+
+        print(f"{'='*70}\n")
+
+    def merge_from_checkpoint(self, checkpoint_path: str):
+        """從 checkpoint 合併歷史最佳"""
+        try:
+            if not os.path.exists(checkpoint_path):
+                return
+
+            with open(checkpoint_path, 'rb') as f:
+                data = pickle.load(f)
+
+            # 從 halloffame 提取
+            if 'halloffame' in data:
+                for item in data['halloffame']:
+                    if isinstance(item, dict):
+                        genes = item.get('genes')
+                        fitness = item.get('fitness', 0)
+                    else:
+                        genes = list(item)
+                        fitness = item.fitness.values[0] if hasattr(item, 'fitness') and item.fitness.valid else 0
+
+                    if genes and fitness > 0:
+                        self.update(genes, sharpe=fitness, fitness=fitness)
+
+            print(f"✅ 已從 {checkpoint_path} 合併歷史最佳")
+
+        except Exception as e:
+            print(f"⚠️ 合併失敗: {e}")
+
+# 全域歷史前20管理器（稍後初始化）
+historical_top20_mgr = None
+
+# =============================================================================
 # 🔥 3視窗交互機制 - 核心功能
 # =============================================================================
 class CrossWindowManager:
@@ -882,6 +1070,10 @@ cross_window_mgr = CrossWindowManager(BASE_DIR, WINDOW_ID, SHARED_DIR)
 # 初始化 checkpoint 管理器
 checkpoint_mgr = CheckpointManager(WINDOW_ID, BASE_DIR)
 print("✅ Checkpoint 管理器已初始化")
+
+# 🏆 初始化歷史前20管理器 (v12.6 新增)
+historical_top20_mgr = HistoricalTop20Manager(BASE_DIR, WINDOW_ID)
+print(f"🏆 歷史前20管理器已初始化 (目前有 {len(historical_top20_mgr.top20)} 個歷史最佳)")
 
 # =============================================================================
 # 安全條件計算函數
@@ -2172,6 +2364,19 @@ class EvolutionEngine:
                             f"比率: {oos_result['sharpe_ratio']:.1%} {overfit_flag}",
                             'success' if not oos_result['is_overfit'] else 'warning'
                         )
+
+                        # 🏆 更新歷史前20 (v12.6 新增)
+                        historical_top20_mgr.update(
+                            genes=list(best_ind),
+                            sharpe=train_sharpe,
+                            train_sharpe=train_sharpe,
+                            test_sharpe=test_sharpe,
+                            generation=gen + 1,
+                            metadata={
+                                'sharpe_ratio': oos_result['sharpe_ratio'],
+                                'is_overfit': oos_result['is_overfit']
+                            }
+                        )
                     else:
                         # 非新最佳也發送通知
                         overfit_flag = "🔴" if oos_result['is_overfit'] else "🟢"
@@ -2181,6 +2386,16 @@ class EvolutionEngine:
                             f"測試期夏普: {test_sharpe:.3f}\n"
                             f"比率: {oos_result['sharpe_ratio']:.1%} {overfit_flag}"
                         )
+
+                        # 🏆 即使非最佳，若夏普 > 2.0 也加入歷史前20考量
+                        if train_sharpe > 2.0:
+                            historical_top20_mgr.update(
+                                genes=list(best_ind),
+                                sharpe=train_sharpe,
+                                train_sharpe=train_sharpe,
+                                test_sharpe=test_sharpe,
+                                generation=gen + 1
+                            )
 
             # 每 20 代發送進度 + 顯示各視窗狀態
             if (gen + 1) % 20 == 0:
@@ -2327,12 +2542,13 @@ class EvolutionEngine:
 def main():
     print(f"""
 ╔════════════════════════════════════════════════════════════════════════════╗
-║      六組合快快龍 基因演算法 v12.2 (樣本外測試版)                              ║
+║      六組合快快龍 基因演算法 v12.6 (歷史前20保留版)                            ║
 ╠════════════════════════════════════════════════════════════════════════════╣
 ║  🎯 目標：夏普 {TARGET_SHARPE}+, 胃納量 {MIN_CAPACITY/1e4:.0f}萬+, 回檔 {MAX_DRAWDOWN*100:.0f}%以內           ║
 ║  📊 訓練期：{TRAIN_START} ~ {TRAIN_END}  (用於演化優化)                  ║
 ║  🔬 測試期：{TEST_START} ~ {TEST_END}  (用於過擬合檢測)                  ║
 ║  🔄 3視窗交互：每 {CROSS_WINDOW_INTERVAL} 代交換 Top {CROSS_WINDOW_TOP_N} 精英                              ║
+║  🏆 歷史前20：自動保留最佳20個基因組合                               ║
 ║  📁 共享區：{SHARED_DIR[-40:]:40s} ║
 ╚════════════════════════════════════════════════════════════════════════════╝
     """)
@@ -2340,7 +2556,11 @@ def main():
     engine = EvolutionEngine()
     population, result = engine.run(N_GENERATIONS)
 
+    # 🏆 列印歷史前20摘要
+    historical_top20_mgr.print_summary()
+
     print(f"\n✅ 完成！結果保存於: {WINDOW_DIR}")
+    print(f"🏆 歷史前20已保存於: {historical_top20_mgr.shared_top20_file}")
     return population, result
 
 if __name__ == "__main__":
