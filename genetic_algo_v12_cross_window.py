@@ -3181,14 +3181,17 @@ def main():
         if best_gene:
             print(f"   歷史最佳夏普: {best_gene.get('sharpe', 0):.4f}")
 
-            # 完整回測
+            # 🔥 完整回測並上傳到 FinLab 顯示官方報告
             try:
-                result = run_backtest(best_gene['genes'], name="歷史最佳_完整回測")
-                if result:
-                    print(f"\n📈 完整回測結果 (2014-2025):")
-                    print(f"   夏普值: {result.get('sharpe', 0):.4f}")
-                    print(f"   年化報酬: {result.get('annual_return', 0)*100:.1f}%")
-                    print(f"   最大回撤: {result.get('max_drawdown', 0)*100:.1f}%")
+                result = run_backtest(
+                    best_gene['genes'],
+                    upload=True,  # 🔥 上傳到 FinLab
+                    name=f"快快龍_視窗{WINDOW_ID}_歷史最佳"
+                )
+                if result and result.get('report'):
+                    print(f"\n📈 歷史最佳完整回測 (已上傳到 FinLab):")
+                    result['report'].display()  # 🔥 顯示官方樣式報告
+                    print(f"\n✅ 已上傳: 快快龍_視窗{WINDOW_ID}_歷史最佳")
 
                 # OOS 測試
                 oos_result = run_oos_test(best_gene['genes'], name="歷史最佳_OOS")
@@ -3202,6 +3205,8 @@ def main():
                     print(f"   穩定性: {ratio*100:.1f}%")
             except Exception as e:
                 print(f"   ⚠️ 回測失敗: {e}")
+                import traceback
+                traceback.print_exc()
 
         print("\n" + "="*70)
         print("🚀 開始從穩定基因繼續演化...")
