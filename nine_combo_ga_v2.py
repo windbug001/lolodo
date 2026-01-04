@@ -482,29 +482,59 @@ def combine_strategies(params: Dict) -> pd.DataFrame:
 
     combined = sum(positions)
 
-    # ⚠️ 關鍵：確保每股至少 3%，否則設為 0
-    # 計算每日持股數量，根據 n_stocks 決定
+    # ⚠️ 關鍵：確保每股至少 3%，否則設為 0（但保留原始相對權重）
     n_stocks = params.get('n_stocks', 20)
     max_stocks = int(1 / MIN_POSITION_RATIO)  # 最多 33 檔 (3% 下限)
-
-    # 每天只保留前 N 名，確保每股 >= 3%
     actual_n = min(n_stocks, max_stocks)
 
-    # 重新選取前 N 名
-    def select_top_n(row):
-        """每天選前 N 名，其餘設 0"""
-        # 確保是數值型態
+    def normalize_with_min_position(row):
+        """
+        保留原始權重，過濾掉低於 3% 的股票，重新正規化
+        - 先選前 N 名
+        - 正規化為 100%
+        - 過濾掉 < 3% 的股票
+        - 重新正規化，迭代直到所有股票都 >= 3%
+        """
         row_numeric = pd.to_numeric(row, errors='coerce').fillna(0)
         valid = row_numeric[row_numeric > 0]
+
         if len(valid) == 0:
             return pd.Series(0.0, index=row.index)
+
+        # 選前 N 名
         valid = valid.nlargest(min(actual_n, len(valid)))
-        result = pd.Series(0.0, index=row.index)
-        if len(valid) > 0:
-            # 等權重分配，確保每股 >= 3%
-            weight = 1.0 / len(valid)
-            result[valid.index] = weight
-        return result
+
+        # 迭代過濾：移除 < 3% 的股票並重新正規化
+        for _ in range(10):  # 最多迭代 10 次
+            total = valid.sum()
+            if total <= 0:
+                return pd.Series(0.0, index=row.index)
+
+            # 正規化
+            normalized = valid / total
+
+            # 檢查是否有 < 3% 的股票
+            below_min = normalized < MIN_POSITION_RATIO
+            if not below_min.any():
+                # 所有股票都 >= 3%，完成
+                result = pd.Series(0.0, index=row.index)
+                result[normalized.index] = normalized.values
+                return result
+
+            # 移除 < 3% 的股票
+            valid = valid[~below_min]
+
+            if len(valid) == 0:
+                return pd.Series(0.0, index=row.index)
+
+        # 迭代完成後，返回結果
+        total = valid.sum()
+        if total > 0:
+            normalized = valid / total
+            result = pd.Series(0.0, index=row.index)
+            result[normalized.index] = normalized.values
+            return result
+        return pd.Series(0.0, index=row.index)
 
     # 確保 combined 是數值型態
     combined = combined.apply(pd.to_numeric, errors='coerce').fillna(0)
@@ -512,8 +542,8 @@ def combine_strategies(params: Dict) -> pd.DataFrame:
     if combined.empty:
         return pd.DataFrame()
 
-    # 應用持股數量限制
-    position = combined.apply(select_top_n, axis=1)
+    # 應用持股權重正規化（保留相對權重，過濾 < 3%）
+    position = combined.apply(normalize_with_min_position, axis=1)
 
     return position
 
