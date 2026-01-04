@@ -3171,6 +3171,42 @@ def main():
     # 🧬 繼續演化模式：從穩定基因繼續演化
     if continue_evolution:
         print("🧬 繼續演化模式啟動...")
+
+        # 🔥 先完整回測歷史最佳
+        print("\n" + "="*70)
+        print("📊 先完整回測歷史最佳基因...")
+        print("="*70)
+
+        best_gene = historical_top20_mgr.get_best()
+        if best_gene:
+            print(f"   歷史最佳夏普: {best_gene.get('sharpe', 0):.4f}")
+
+            # 完整回測
+            try:
+                result = run_backtest(best_gene['genes'], name="歷史最佳_完整回測")
+                if result:
+                    print(f"\n📈 完整回測結果 (2014-2025):")
+                    print(f"   夏普值: {result.get('sharpe', 0):.4f}")
+                    print(f"   年化報酬: {result.get('annual_return', 0)*100:.1f}%")
+                    print(f"   最大回撤: {result.get('max_drawdown', 0)*100:.1f}%")
+
+                # OOS 測試
+                oos_result = run_oos_test(best_gene['genes'], name="歷史最佳_OOS")
+                if oos_result:
+                    train_s = oos_result['train']['sharpe']
+                    test_s = oos_result['test']['sharpe']
+                    ratio = test_s / train_s if train_s > 0 else 0
+                    print(f"\n🔬 樣本外測試結果:")
+                    print(f"   訓練期夏普 (2014-2022): {train_s:.4f}")
+                    print(f"   測試期夏普 (2023-2025): {test_s:.4f}")
+                    print(f"   穩定性: {ratio*100:.1f}%")
+            except Exception as e:
+                print(f"   ⚠️ 回測失敗: {e}")
+
+        print("\n" + "="*70)
+        print("🚀 開始從穩定基因繼續演化...")
+        print("="*70 + "\n")
+
         population, best = seed_evolution_from_stable_genes(
             n_generations=evolution_generations
         )
