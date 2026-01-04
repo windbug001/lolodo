@@ -2363,6 +2363,7 @@ def main():
             # 應用 3% 持股約束
             position = position_weight_mgr.normalize_position(position)
 
+            # 🔥 上傳到 FinLab 並顯示官方報告
             report = sim(
                 position=position,
                 fee_ratio=1.425 / 1000,
@@ -2372,17 +2373,19 @@ def main():
                 stop_loss=best_params['stop_loss'],
                 trail_stop=best_params['trail_stop'],
                 take_profit=best_params['take_profit'],
+                stop_trading_next_period=False,
+                upload=True,  # 🔥 上傳到 FinLab
+                name=f'小小龍_視窗{WINDOW_ID}_歷史最佳'
             )
 
             if report:
-                stats = report.get_stats()
-                print(f"\n📈 歷史最佳完整回測結果:")
-                print(f"   夏普值: {stats.get('sharpe', 0):.4f}")
-                print(f"   年化報酬: {stats.get('annual_return', 0)*100:.1f}%")
-                print(f"   最大回撤: {stats.get('max_drawdown', 0)*100:.1f}%")
-                print(f"   勝率: {stats.get('win_rate', 0)*100:.1f}%")
+                print(f"\n📈 歷史最佳完整回測 (已上傳到 FinLab):")
+                report.display()  # 🔥 顯示官方樣式報告
+                print(f"\n✅ 已上傳: 小小龍_視窗{WINDOW_ID}_歷史最佳")
         except Exception as e:
             print(f"   ⚠️ 歷史最佳回測失敗: {e}")
+            import traceback
+            traceback.print_exc()
 
         print("\n" + "="*70)
         print("🚀 開始演化優化...")
