@@ -19,7 +19,7 @@
 ✅ 防止中斷導致檔案損壞
 
 【v12.2 新增功能 - 樣本外測試】
-✅ 訓練期/測試期分離 (2014~2022 訓練, 2023~2025 測試)
+✅ 訓練期/測試期分離 (2017~2022 訓練, 2023~2025 測試)
 ✅ 適應度評估僅使用訓練期數據
 ✅ 每5代顯示訓練期 vs 測試期夏普比較
 ✅ 自動過擬合警告（測試/訓練比 < 60%）
@@ -152,7 +152,7 @@ CROSS_WINDOW_INTERVAL = 10   # 每10代交換一次
 CROSS_WINDOW_TOP_N = 5       # 每次交換最佳5個基因
 ALL_WINDOW_IDS = [1, 2, 3]   # 所有視窗ID
 
-BACKTEST_START = '2014-01-01'
+BACKTEST_START = '2017-01-01'  # 2017 年前部分參數無數據
 FEE_RATIO = 1.425/1000
 TAX_RATIO = 3/1000
 FULL_BACKTEST_INTERVAL = 5
@@ -160,7 +160,7 @@ FULL_BACKTEST_INTERVAL = 5
 # =============================================================================
 # 🔬 樣本外測試設定 (Out-of-Sample Testing)
 # =============================================================================
-TRAIN_START = '2014-01-01'   # 訓練期開始
+TRAIN_START = '2017-01-01'   # 訓練期開始（2017 年前部分參數無數據）
 TRAIN_END = '2022-12-31'     # 訓練期結束
 TEST_START = '2023-01-01'    # 測試期開始
 TEST_END = '2025-12-31'      # 測試期結束（或使用最新日期）
@@ -3200,8 +3200,8 @@ def main():
                     test_s = oos_result['test']['sharpe']
                     ratio = test_s / train_s if train_s > 0 else 0
                     print(f"\n🔬 樣本外測試結果:")
-                    print(f"   訓練期夏普 (2014-2022): {train_s:.4f}")
-                    print(f"   測試期夏普 (2023-2025): {test_s:.4f}")
+                    print(f"   訓練期夏普 ({TRAIN_START[:4]}-{TRAIN_END[:4]}): {train_s:.4f}")
+                    print(f"   測試期夏普 ({TEST_START[:4]}-{TEST_END[:4]}): {test_s:.4f}")
                     print(f"   穩定性: {ratio*100:.1f}%")
             except Exception as e:
                 print(f"   ⚠️ 回測失敗: {e}")
