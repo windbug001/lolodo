@@ -566,7 +566,8 @@ def run_backtest(position, params, start_date=None, end_date=None, name="Strateg
             fee_ratio=1.425/1000,
             tax_ratio=3/1000,
             trade_at_price="high_low_avg",
-            position_limit=MIN_POSITION_RATIO,  # ⚠️ 每股至少 3%
+            # ⚠️ 移除 position_limit，因為它是「最大」限制，會強制等權重
+            # 最小 3% 的邏輯已在 normalize_with_min_position 函數處理
             stop_loss=params.get('stop_loss', 0.25),
             upload=upload,
             name=name
