@@ -600,6 +600,14 @@ def evaluate(individual):
         capacity = result['capacity']
         max_dd = result['max_drawdown']
 
+        # ⚠️ 硬性限制：最大回檔超過 20% 則大幅懲罰
+        if max_dd > MAX_DRAWDOWN:
+            # 回檔超標，嚴重懲罰適應度
+            penalty = (max_dd - MAX_DRAWDOWN) * 10  # 超過越多懲罰越重
+            sharpe = sharpe - penalty
+            if sharpe < 0:
+                sharpe = 0
+
         # 多目標適應度
         f1 = sharpe
         f2 = np.log10(max(capacity, 1))
