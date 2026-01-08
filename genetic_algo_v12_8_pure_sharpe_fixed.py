@@ -144,7 +144,7 @@ OVERFIT_SHARPE_RATIO = 0.6   # 測試期夏普 / 訓練期夏普 < 0.6 則警告
 OVERFIT_RETURN_RATIO = 0.5   # 測試期報酬 / 訓練期報酬 < 0.5 則警告
 
 print(f"{'='*80}")
-print(f"🚀 六組合快快龍 v12.6 (完整版 - 參考備份程式修正參數範圍) - Window {WINDOW_ID}")
+print(f"🚀 六組合快快龍 v12.8 (純夏普修正版) - Window {WINDOW_ID}")
 print(f"   🎯 目標：夏普 >= {TARGET_SHARPE}, 胃納量 >= {MIN_CAPACITY/1e4:.0f}萬")
 print(f"   📉 最大回檔限制：{MAX_DRAWDOWN*100:.0f}%")
 print(f"   🔄 視窗交互：每 {CROSS_WINDOW_INTERVAL} 代交換 Top {CROSS_WINDOW_TOP_N} 基因")
@@ -433,7 +433,7 @@ class DiscordNotifier:
 
         if self.enabled:
             try:
-                payload = {"content": f"✅ 六組合快快龍 v12.3 (完整版) - Window {WINDOW_ID} 啟動\n   訓練期: {TRAIN_START}~{TRAIN_END}\n   測試期: {TEST_START}~{TEST_END}", "username": "快快龍"}
+                payload = {"content": f"✅ 六組合快快龍 v12.8 (純夏普修正版) - Window {WINDOW_ID} 啟動\n   訓練期: {TRAIN_START}~{TRAIN_END}\n   測試期: {TEST_START}~{TEST_END}", "username": "快快龍"}
                 requests.post(self.webhook_url, json=payload, timeout=5)
                 print("✅ Discord 通知系統已連接")
             except:
@@ -3188,7 +3188,7 @@ def main():
 
     print(f"""
 ╔════════════════════════════════════════════════════════════════════════════╗
-║      六組合快快龍 基因演算法 v12.6 (歷史前20保留版)                            ║
+║      六組合快快龍 基因演算法 v12.8 (純夏普修正版)                              ║
 ╠════════════════════════════════════════════════════════════════════════════╣
 ║  🎯 目標：夏普 {TARGET_SHARPE}+, 胃納量 {MIN_CAPACITY/1e4:.0f}萬+, 回檔 {MAX_DRAWDOWN*100:.0f}%以內           ║
 ║  📊 訓練期：{TRAIN_START} ~ {TRAIN_END}  (用於演化優化)                  ║
