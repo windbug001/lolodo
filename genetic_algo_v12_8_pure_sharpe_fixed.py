@@ -137,7 +137,7 @@ FULL_BACKTEST_INTERVAL = 5
 TRAIN_START = '2017-01-01'   # 訓練期開始（2017 年前部分參數無數據）
 TRAIN_END = '2022-12-31'     # 訓練期結束
 TEST_START = '2023-01-01'    # 測試期開始
-TEST_END = '2025-12-31'      # 測試期結束（或使用最新日期）
+TEST_END = datetime.now().strftime('%Y-%m-%d')  # 🔥 測試期結束：使用當前日期
 
 # 過擬合警告閾值
 OVERFIT_SHARPE_RATIO = 0.6   # 測試期夏普 / 訓練期夏普 < 0.6 則警告
