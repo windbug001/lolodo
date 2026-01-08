@@ -1143,6 +1143,19 @@ print("✅ Checkpoint 管理器已初始化")
 
 # 🏆 初始化歷史前20管理器 (v12.6 新增)
 historical_top20_mgr = HistoricalTop20Manager(BASE_DIR, WINDOW_ID)
+
+# 🔧 v12.8 修正：清理異常夏普值記錄（舊版混合適應度被誤存為夏普值）
+MAX_VALID_SHARPE = 5.0  # 純夏普值不太可能超過 5.0
+original_count = len(historical_top20_mgr.top20)
+historical_top20_mgr.top20 = [
+    item for item in historical_top20_mgr.top20
+    if item.get('sharpe', 0) <= MAX_VALID_SHARPE
+]
+cleaned_count = original_count - len(historical_top20_mgr.top20)
+if cleaned_count > 0:
+    print(f"🧹 已清理 {cleaned_count} 筆異常夏普值記錄 (夏普 > {MAX_VALID_SHARPE})")
+    historical_top20_mgr._save()  # 保存清理後的結果
+
 print(f"🏆 歷史前20管理器已初始化 (目前有 {len(historical_top20_mgr.top20)} 個歷史最佳)")
 
 # 🔥 自動匯入外部優秀基因（如果有指定）
