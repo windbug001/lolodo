@@ -61,9 +61,18 @@ import pandas as pd
 pd.set_option('display.max_columns', None)
 pd.set_option('future.no_silent_downcasting', True)
 
-# === 🔥 核心設定（請修改）===
-WINDOW_ID = 1  # 🔥 視窗 ID (1-4)，多視窗執行時請修改此值
-FINLAB_API_KEY = "R5XcZHGBZgEO5zz+6e1iYAe3wcFiimTUNaCMKsnZEiM42Wp49xW46MySUZT1W/Ee#vip_m"
+# === 🔥 核心設定 ===
+# 🔥 視窗 ID - 從環境變數讀取，支援 3 視窗並行
+WINDOW_ID = int(os.environ.get('WINDOW_ID', 1))  # 預設視窗 1
+if WINDOW_ID not in [1, 2, 3]:
+    print(f"⚠️ WINDOW_ID={WINDOW_ID} 無效，使用預設值 1")
+    WINDOW_ID = 1
+
+# 🔥 FinLab API Key - 優先從環境變數讀取
+FINLAB_API_KEY = os.environ.get(
+    'FINLAB_API_KEY',
+    "R5XcZHGBZgEO5zz+6e1iYAe3wcFiimTUNaCMKsnZEiM42Wp49xW46MySUZT1W/Ee#vip_m"
+)
 
 # 優化目標
 TARGET_SHARPE = 4.0
@@ -1041,26 +1050,55 @@ print("✅ DEAP NSGA-II 配置完成")
 # 第十部分：Pareto 歷史管理器
 # =============================================================================
 class ParetoArchiveManager:
-    """Pareto 前緣歷史管理器"""
+    """Pareto 前緣歷史管理器 - 支援 3 視窗交叉共享"""
 
-    def __init__(self, archive_file: str):
+    def __init__(self, archive_file: str, pareto_dir: str = None):
         self.archive_file = archive_file
+        self.pareto_dir = pareto_dir or os.path.dirname(archive_file)
         self.archive = []
         self._load()
+        self._load_cross_window_elites()  # 🔥 載入其他視窗的精英
 
     def _load(self):
-        """載入歷史"""
+        """載入本視窗歷史"""
         if os.path.exists(self.archive_file):
             try:
                 with open(self.archive_file, 'rb') as f:
                     data = pickle.load(f)
                     self.archive = data.get('individuals', [])
-                print(f"✅ 載入 {len(self.archive)} 個歷史精英")
+                print(f"✅ 視窗 {WINDOW_ID}: 載入 {len(self.archive)} 個本地精英")
             except Exception as e:
                 print(f"⚠️ 歷史載入失敗: {e}")
                 self.archive = []
         else:
-            print("ℹ️ 無歷史存檔，從頭開始")
+            print(f"ℹ️ 視窗 {WINDOW_ID}: 無歷史存檔，從頭開始")
+
+    def _load_cross_window_elites(self):
+        """🔥 載入其他視窗的精英（3視窗交叉共享）"""
+        cross_elites = []
+        for wid in [1, 2, 3]:
+            if wid == WINDOW_ID:
+                continue  # 跳過本視窗
+
+            other_file = f"{self.pareto_dir}/pareto_archive_w{wid}.pkl"
+            if os.path.exists(other_file):
+                try:
+                    with open(other_file, 'rb') as f:
+                        data = pickle.load(f)
+                        elites = data.get('individuals', [])
+                        # 取前 5 名精英
+                        top_elites = sorted(elites, key=lambda x: sum(x['fitness']), reverse=True)[:5]
+                        cross_elites.extend(top_elites)
+                        print(f"   📥 從視窗 {wid} 載入 {len(top_elites)} 個精英")
+                except:
+                    pass
+
+        if cross_elites:
+            # 合併並去重
+            self.archive = self._deduplicate(self.archive + cross_elites)
+            self.archive.sort(key=lambda x: sum(x['fitness']), reverse=True)
+            self.archive = self.archive[:30]  # 保留前 30 名
+            print(f"   🔄 跨視窗共享後總計: {len(self.archive)} 個精英")
 
     def update(self, pareto_front: List):
         """更新 Pareto 前緣"""
@@ -1128,7 +1166,7 @@ class ParetoArchiveManager:
 
         return population
 
-pareto_archive = ParetoArchiveManager(paths.pareto_archive)
+pareto_archive = ParetoArchiveManager(paths.pareto_archive, paths.pareto_dir)
 
 # =============================================================================
 # 第十一部分：演化引擎
