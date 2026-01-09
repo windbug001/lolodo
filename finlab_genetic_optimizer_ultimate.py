@@ -73,9 +73,13 @@ MAX_DRAWDOWN = 0.2
 
 # GA 演化參數
 POPULATION_SIZE = 50  # 較小的族群，因為 FinLab 回測較慢
-N_GENERATIONS = 100
+N_GENERATIONS = 500   # 🔥 增加至 500 代以獲得更佳收斂
 MUTATION_RATE = 0.2
 CROSSOVER_RATE = 0.8
+
+# 🔥 斷點續傳設定
+ENABLE_RESUME = True  # 啟用從歷史最佳繼續執行
+CHECKPOINT_INTERVAL = 10  # 每 10 代保存檢查點
 
 # Walk-Forward 設定
 WALK_FORWARD_WINDOWS = 3  # 3 個時間窗口
@@ -87,8 +91,10 @@ BACKTEST_START = '2017-01-01'
 BACKTEST_END = None
 
 print(f"=" * 80)
-print(f"🚀 FinLab 台股基因演算法優化系統 v1.0 - 視窗 {WINDOW_ID}")
+print(f"🚀 FinLab 台股基因演算法優化系統 v1.1 - 視窗 {WINDOW_ID}")
 print(f"   🎯 目標：夏普 >= {TARGET_SHARPE}, 胃納量 >= {MIN_CAPACITY/1e7:.0f}00萬")
+print(f"   🧬 演化：{N_GENERATIONS} 代 | 族群：{POPULATION_SIZE}")
+print(f"   🔄 從歷史最佳繼續：{'啟用' if ENABLE_RESUME else '停用'}")
 print(f"=" * 80)
 
 # =============================================================================
@@ -231,6 +237,11 @@ class PathManager:
     @property
     def progress_log(self) -> str:
         return f"{self.log_dir}/progress_history.json"
+
+    @property
+    def checkpoint_file(self) -> str:
+        """檢查點檔案路徑"""
+        return f"{self.window_dir}/checkpoint_w{self.window_id}.pkl"
 
 paths = PathManager()
 print(f"📁 工作目錄: {paths.output_dir}")
@@ -1172,6 +1183,55 @@ class EvolutionEngine:
         self.pareto_mgr = pareto_mgr
         self.history = []
         self.logger = ProgressLogger(WINDOW_ID)  # 🔥 初始化進度日誌記錄器
+        self.checkpoint_file = paths.checkpoint_file
+
+    def _save_checkpoint(self, gen: int, population: List, stats: Dict):
+        """保存檢查點"""
+        try:
+            checkpoint = {
+                'generation': gen,
+                'population': [(list(ind), ind.fitness.values) for ind in population],
+                'history': self.history,
+                'stats': stats,
+                'timestamp': datetime.now().isoformat(),
+            }
+            with open(self.checkpoint_file, 'wb') as f:
+                pickle.dump(checkpoint, f)
+            print(f"   💾 檢查點已保存 (第 {gen+1} 代)")
+        except Exception as e:
+            print(f"   ⚠️ 檢查點保存失敗: {e}")
+
+    def _load_checkpoint(self) -> Tuple[Optional[int], Optional[List]]:
+        """載入檢查點"""
+        if not ENABLE_RESUME:
+            return None, None
+
+        if not os.path.exists(self.checkpoint_file):
+            return None, None
+
+        try:
+            with open(self.checkpoint_file, 'rb') as f:
+                checkpoint = pickle.load(f)
+
+            gen = checkpoint['generation']
+            pop_data = checkpoint['population']
+            self.history = checkpoint.get('history', [])
+
+            # 重建族群
+            population = []
+            for genes, fitness_vals in pop_data:
+                ind = creator.Individual(genes)
+                ind.fitness.values = fitness_vals
+                population.append(ind)
+
+            print(f"✅ 從檢查點恢復: 第 {gen+1} 代")
+            print(f"   📊 已有 {len(self.history)} 代歷史記錄")
+
+            return gen, population
+
+        except Exception as e:
+            print(f"⚠️ 檢查點載入失敗: {e}")
+            return None, None
 
     def run(self, n_generations: int = N_GENERATIONS) -> Tuple[List, List]:
         """執行演化"""
@@ -1180,17 +1240,24 @@ class EvolutionEngine:
         print(f"   族群: {POPULATION_SIZE}, 世代: {n_generations}")
         print(f"{'='*70}\n")
 
-        # 初始化族群
-        population = self.toolbox.population(n=POPULATION_SIZE)
+        # 🔥 嘗試從檢查點恢復
+        start_gen, population = self._load_checkpoint()
 
-        # 注入歷史精英
-        population = self.pareto_mgr.inject_elites(population, ratio=0.3)
+        if population is None:
+            # 初始化新族群
+            population = self.toolbox.population(n=POPULATION_SIZE)
 
-        # 初始評估
-        population = self._evaluate_population(population)
+            # 注入歷史精英
+            population = self.pareto_mgr.inject_elites(population, ratio=0.3)
+
+            # 初始評估
+            population = self._evaluate_population(population)
+            start_gen = -1
+        else:
+            print(f"   🔄 從第 {start_gen + 2} 代繼續執行...")
 
         # 演化循環
-        for gen in range(n_generations):
+        for gen in range(start_gen + 1, n_generations):
             start_time = time.time()
 
             # 選擇
@@ -1230,6 +1297,10 @@ class EvolutionEngine:
                 print(f"   最佳胃納量: {stats['best_capacity']:.0f} 萬")
                 print(f"   穩健性: {stats['best_robustness']:.2f}")
                 print(f"   耗時: {elapsed:.1f}s")
+
+            # 🔥 保存檢查點
+            if (gen + 1) % CHECKPOINT_INTERVAL == 0:
+                self._save_checkpoint(gen, population, stats)
 
         # Pareto 前緣
         pareto_front = tools.sortNondominated(population, len(population), first_front_only=True)[0]
