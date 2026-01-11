@@ -1167,17 +1167,15 @@ class BacktestEngine:
             if position is None or position.empty:
                 return None
 
-            # 🔧 清理 DataFrame 確保一致性
+            # 🔧 清理 DataFrame（保守方式，不破壞索引結構）
             # 移除重複的列
             position = position.loc[:, ~position.columns.duplicated()]
-            # 移除重複的索引
+            # 移除重複的索引（保持第一個）
             position = position[~position.index.duplicated(keep='first')]
-            # 確保所有值都是數值型
+            # 確保所有值都是數值型，NaN 填 0
             position = position.apply(pd.to_numeric, errors='coerce').fillna(0)
-            # 移除全零列
-            position = position.loc[:, (position != 0).any(axis=0)]
-            # 移除全零行
-            position = position.loc[(position != 0).any(axis=1)]
+            # 確保 DataFrame 是連續的（不移除任何行，只確保結構正確）
+            position = position.astype(float)
 
             # 過濾時間
             if start_date:
@@ -1187,9 +1185,6 @@ class BacktestEngine:
 
             if position is None or position.empty or len(position) < 50:
                 return None
-
-            # 再次確保 DataFrame 結構正確
-            position = position.copy()
 
             # 執行回測
             report = sim_func(
