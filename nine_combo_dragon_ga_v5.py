@@ -1084,41 +1084,43 @@ class StrategyCombiner:
         # 正規化權重
         def normalize_row(row):
             """正規化單列權重，確保最小權重限制"""
-            row_numeric = pd.to_numeric(row, errors='coerce').fillna(0)
-            valid = row_numeric[row_numeric > 0]
+            try:
+                row_numeric = pd.to_numeric(row, errors='coerce').fillna(0)
+                valid = row_numeric[row_numeric > 0]
 
-            if len(valid) == 0:
-                return pd.Series(0.0, index=row.index)
+                if len(valid) == 0:
+                    return row * 0.0  # 保持原索引，全部設為 0
 
-            # 選出 top N
-            top_n = valid.nlargest(min(n_stocks, len(valid)))
+                # 選出 top N
+                top_n = valid.nlargest(min(n_stocks, len(valid)))
 
-            # 迭代移除不滿足最小權重的標的
-            for _ in range(10):
+                # 迭代移除不滿足最小權重的標的
+                for _ in range(10):
+                    total = top_n.sum()
+                    if total <= 0:
+                        return row * 0.0
+
+                    normalized = top_n / total
+                    below_min = normalized < CONFIG.min_position_weight
+
+                    if not below_min.any():
+                        # 使用 reindex 確保索引對齊
+                        return normalized.reindex(row.index, fill_value=0.0)
+
+                    top_n = top_n[~below_min]
+                    if len(top_n) == 0:
+                        return row * 0.0
+
+                # 最終正規化
                 total = top_n.sum()
-                if total <= 0:
-                    return pd.Series(0.0, index=row.index)
+                if total > 0:
+                    final = top_n / total
+                    return final.reindex(row.index, fill_value=0.0)
 
-                normalized = top_n / total
-                below_min = normalized < CONFIG.min_position_weight
+                return row * 0.0
 
-                if not below_min.any():
-                    result = pd.Series(0.0, index=row.index)
-                    result[normalized.index] = normalized.values
-                    return result
-
-                top_n = top_n[~below_min]
-                if len(top_n) == 0:
-                    return pd.Series(0.0, index=row.index)
-
-            # 最終正規化
-            total = top_n.sum()
-            if total > 0:
-                result = pd.Series(0.0, index=row.index)
-                result[top_n.index] = (top_n / total).values
-                return result
-
-            return pd.Series(0.0, index=row.index)
+            except Exception:
+                return row * 0.0  # 發生錯誤時返回全零
 
         return combined.apply(normalize_row, axis=1)
 
