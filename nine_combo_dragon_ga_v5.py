@@ -1167,15 +1167,31 @@ class BacktestEngine:
             if position is None or position.empty:
                 return None
 
-            # 🔧 清理 DataFrame（保守方式，不破壞索引結構）
+            # 🔧 清理 DataFrame 並對齊到價格數據索引（解決不同視窗股票池導致的索引不一致）
             # 移除重複的列
             position = position.loc[:, ~position.columns.duplicated()]
             # 移除重複的索引（保持第一個）
             position = position[~position.index.duplicated(keep='first')]
             # 確保所有值都是數值型，NaN 填 0
             position = position.apply(pd.to_numeric, errors='coerce').fillna(0)
-            # 確保 DataFrame 是連續的（不移除任何行，只確保結構正確）
             position = position.astype(float)
+
+            # 🔑 關鍵修復：對齊到價格數據的索引和列，確保 sim() 不會出現索引長度不匹配
+            if DATA.close is not None:
+                # 取得價格數據的索引和列（這是 sim() 期望的結構）
+                price_index = DATA.close.index
+                price_columns = DATA.close.columns
+
+                # 找出共同的索引（position 和 price 都有的日期）
+                common_index = position.index.intersection(price_index)
+                # 找出共同的列（position 和 price 都有的股票）
+                common_columns = position.columns.intersection(price_columns)
+
+                if len(common_index) > 0 and len(common_columns) > 0:
+                    # 只保留共同的索引和列，確保完全對齊
+                    position = position.loc[common_index, common_columns]
+                    # 重新排序以匹配價格數據的順序
+                    position = position.reindex(index=common_index, columns=common_columns, fill_value=0.0)
 
             # 過濾時間
             if start_date:
