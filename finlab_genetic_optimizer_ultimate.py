@@ -2004,19 +2004,20 @@ class EvolutionEngine:
 # =============================================================================
 def main():
     """主程式入口"""
-    print(f"""
-╔════════════════════════════════════════════════════════════════════════╗
-║     🧬 FinLab 台股基因演算法優化系統 v2.0 - 終極強化版                    ║
-║     NSGA-II + Walk-Forward + Pareto Archive + 樣本內外分離              ║
-╠════════════════════════════════════════════════════════════════════════╣
-║  🎯 目標：夏普 {TARGET_SHARPE}+, 胃納量 {MIN_CAPACITY/1e7:.0f}00萬+, MDD < {MAX_DRAWDOWN*100:.0f}%                      ║
-║  📊 樣本內: {IN_SAMPLE_START} ~ {IN_SAMPLE_END}                                ║
-║  📊 樣本外: {OUT_OF_SAMPLE_START} ~ {'至今' if OUT_OF_SAMPLE_END is None else OUT_OF_SAMPLE_END}                                     ║
-║  🔬 驗證：Walk-Forward ({WALK_FORWARD_WINDOWS} 窗口) + 歷史精英驗證                      ║
-║  🧬 基因：{GeneDecoder.GENE_LENGTH} 個參數                                                 ║
-║  🖥️  視窗：{WINDOW_ID} / 並行: {N_WORKERS} workers                                      ║
-╚════════════════════════════════════════════════════════════════════════╝
-    """)
+    # 使用簡潔格式避免對齊問題
+    print("")
+    print("=" * 60)
+    print("  FinLab 台股基因演算法優化系統 v2.0 - 終極強化版")
+    print("  NSGA-II + Walk-Forward + Pareto Archive + 樣本內外分離")
+    print("=" * 60)
+    print(f"  目標: 夏普 {TARGET_SHARPE}+, 胃納量 {MIN_CAPACITY/1e7:.0f}00萬+, MDD < {MAX_DRAWDOWN*100:.0f}%")
+    print(f"  樣本內: {IN_SAMPLE_START} ~ {IN_SAMPLE_END}")
+    print(f"  樣本外: {OUT_OF_SAMPLE_START} ~ {'至今' if OUT_OF_SAMPLE_END is None else OUT_OF_SAMPLE_END}")
+    print(f"  驗證: Walk-Forward ({WALK_FORWARD_WINDOWS} 窗口) + 歷史精英驗證")
+    print(f"  基因: {GeneDecoder.GENE_LENGTH} 個參數")
+    print(f"  視窗: {WINDOW_ID} / 並行: {N_WORKERS} workers")
+    print("=" * 60)
+    print("")
 
     # 初始化數據載入器
     dl = get_data_loader()
