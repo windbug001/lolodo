@@ -1076,53 +1076,65 @@ class StrategyCombiner:
         combined = reduce(lambda a, b: a.add(b, fill_value=0), scores)
         combined = combined.apply(pd.to_numeric, errors='coerce').fillna(0)
 
+        # 保存原始索引和列
+        original_index = combined.index.copy()
+        original_columns = combined.columns.copy()
+
         # 持股數量限制
         n_stocks = params.get('n_stocks', CONFIG.target_stocks)
         max_stocks = int(1 / CONFIG.min_position_weight)
         n_stocks = min(n_stocks, max_stocks)
 
-        # 正規化權重
-        def normalize_row(row):
-            """正規化單列權重，確保最小權重限制"""
-            try:
-                row_numeric = pd.to_numeric(row, errors='coerce').fillna(0)
-                valid = row_numeric[row_numeric > 0]
+        # 使用向量化方法正規化（避免 apply 的索引問題）
+        result_data = []
 
-                if len(valid) == 0:
-                    return row * 0.0  # 保持原索引，全部設為 0
+        for idx in original_index:
+            try:
+                row = combined.loc[idx]
+                row_values = pd.to_numeric(row, errors='coerce').fillna(0)
+
+                # 找出正值
+                valid_mask = row_values > 0
+                if not valid_mask.any():
+                    result_data.append(pd.Series(0.0, index=original_columns))
+                    continue
 
                 # 選出 top N
-                top_n = valid.nlargest(min(n_stocks, len(valid)))
+                valid_values = row_values[valid_mask]
+                top_n_idx = valid_values.nlargest(min(n_stocks, len(valid_values))).index
 
-                # 迭代移除不滿足最小權重的標的
+                # 迭代移除低於最小權重的標的
+                selected = row_values[top_n_idx].copy()
                 for _ in range(10):
-                    total = top_n.sum()
+                    total = selected.sum()
                     if total <= 0:
-                        return row * 0.0
-
-                    normalized = top_n / total
+                        break
+                    normalized = selected / total
                     below_min = normalized < CONFIG.min_position_weight
-
                     if not below_min.any():
-                        # 使用 reindex 確保索引對齊
-                        return normalized.reindex(row.index, fill_value=0.0)
+                        break
+                    selected = selected[~below_min]
+                    if len(selected) == 0:
+                        break
 
-                    top_n = top_n[~below_min]
-                    if len(top_n) == 0:
-                        return row * 0.0
+                # 建立結果行
+                result_row = pd.Series(0.0, index=original_columns)
+                if len(selected) > 0 and selected.sum() > 0:
+                    final_weights = selected / selected.sum()
+                    for col in final_weights.index:
+                        if col in result_row.index:
+                            result_row[col] = final_weights[col]
 
-                # 最終正規化
-                total = top_n.sum()
-                if total > 0:
-                    final = top_n / total
-                    return final.reindex(row.index, fill_value=0.0)
-
-                return row * 0.0
+                result_data.append(result_row)
 
             except Exception:
-                return row * 0.0  # 發生錯誤時返回全零
+                result_data.append(pd.Series(0.0, index=original_columns))
 
-        return combined.apply(normalize_row, axis=1)
+        # 建立結果 DataFrame，確保索引和列完全一致
+        result = pd.DataFrame(result_data, index=original_index, columns=original_columns)
+        result = result.fillna(0.0).astype(float)
+
+        return result
 
 
 # 初始化策略組合器
