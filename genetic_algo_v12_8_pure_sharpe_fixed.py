@@ -385,6 +385,86 @@ gene_decoder = DragonGeneDecoder()
 print(f"✅ 基因解碼器初始化完成 (長度: {DragonGeneDecoder.GENE_LENGTH})")
 
 # =============================================================================
+# 🔥 第 4.6 部分：持股配比管理器（提前定義）
+# =============================================================================
+class PositionWeightManager:
+    """
+    📐 持股配比管理器
+
+    約束：
+    1. 每隻股票至少 3%
+    2. 持股必須是 3% 倍數
+    3. 不滿 3% 則不持倉 (0%)
+    4. 總和 = 100%
+    """
+
+    @staticmethod
+    def normalize_weights(raw_weights: pd.Series) -> pd.Series:
+        """正規化權重為符合規則的配比"""
+        if raw_weights.sum() == 0:
+            return raw_weights * 0
+
+        # 正規化到總和 = 1
+        normalized = raw_weights / raw_weights.sum()
+
+        # 過濾小於 3% 的持股
+        mask = normalized >= MIN_POSITION_WEIGHT
+        filtered = normalized[mask]
+
+        if filtered.empty:
+            # 全部被過濾，保留最大的前 N 檔
+            max_stocks = int(1.0 / MIN_POSITION_WEIGHT)
+            top_stocks = normalized.nlargest(min(len(normalized), max_stocks))
+            filtered = top_stocks / top_stocks.sum()
+
+        # 轉換為 3% 倍數
+        quantized = (filtered / POSITION_WEIGHT_STEP).round() * POSITION_WEIGHT_STEP
+
+        # 移除四捨五入後變成 0 的
+        quantized = quantized[quantized >= MIN_POSITION_WEIGHT]
+
+        if quantized.empty:
+            return pd.Series(0.0, index=raw_weights.index)
+
+        # 修正總和誤差
+        total = quantized.sum()
+        if total > 0 and abs(total - 1.0) > 0.001:
+            diff = 1.0 - total
+            max_idx = quantized.idxmax()
+            new_val = quantized[max_idx] + diff
+            if new_val >= MIN_POSITION_WEIGHT:
+                quantized[max_idx] = new_val
+            else:
+                quantized = quantized / total
+
+        result = pd.Series(0.0, index=raw_weights.index)
+        result[quantized.index] = quantized
+        return result
+
+    @staticmethod
+    def apply_to_dataframe(position_df: pd.DataFrame, target_stocks: int = 20) -> pd.DataFrame:
+        """應用配比約束到整個 DataFrame"""
+        result = pd.DataFrame(0.0, index=position_df.index, columns=position_df.columns)
+
+        for date in position_df.index:
+            row = position_df.loc[date]
+            candidates = row[row > 0].sort_values(ascending=False)
+
+            if candidates.empty:
+                continue
+
+            max_n = min(len(candidates), target_stocks, MAX_STOCKS)
+            selected = candidates.iloc[:max_n]
+            normalized = PositionWeightManager.normalize_weights(selected)
+            result.loc[date, normalized.index] = normalized
+
+        return result
+
+# 🔥 提前初始化 weight_manager
+weight_manager = PositionWeightManager()
+print(f"✅ 持股配比管理器初始化完成")
+
+# =============================================================================
 # 第五部分：數據載入器（單例模式）
 # =============================================================================
 class DragonDataLoader:
@@ -558,92 +638,8 @@ class DragonDataLoader:
 data_loader = DragonDataLoader()
 
 # =============================================================================
-# 第六部分：持股配比管理器
-# =============================================================================
-class PositionWeightManager:
-    """
-    📐 持股配比管理器
-
-    約束：
-    1. 每隻股票至少 3%
-    2. 持股必須是 3% 倍數
-    3. 不滿 3% 則不持倉 (0%)
-    4. 總和 = 100%
-    """
-
-    @staticmethod
-    def normalize_weights(raw_weights: pd.Series) -> pd.Series:
-        """正規化權重為符合規則的配比"""
-        if raw_weights.sum() == 0:
-            return raw_weights * 0
-
-        # 正規化到總和 = 1
-        normalized = raw_weights / raw_weights.sum()
-
-        # 過濾小於 3% 的持股
-        mask = normalized >= MIN_POSITION_WEIGHT
-        filtered = normalized[mask]
-
-        if filtered.empty:
-            # 全部被過濾，保留最大的前 N 檔
-            max_stocks = int(1.0 / MIN_POSITION_WEIGHT)
-            top_stocks = normalized.nlargest(min(len(normalized), max_stocks))
-            filtered = top_stocks / top_stocks.sum()
-
-        # 轉換為 3% 倍數
-        quantized = (filtered / POSITION_WEIGHT_STEP).round() * POSITION_WEIGHT_STEP
-
-        # 移除四捨五入後變成 0 的
-        quantized = quantized[quantized >= MIN_POSITION_WEIGHT]
-
-        if quantized.empty:
-            return pd.Series(0.0, index=raw_weights.index)
-
-        # 修正總和誤差
-        total = quantized.sum()
-        if total > 0 and abs(total - 1.0) > 0.001:
-            diff = 1.0 - total
-            # 調整最大權重
-            max_idx = quantized.idxmax()
-            new_val = quantized[max_idx] + diff
-            if new_val >= MIN_POSITION_WEIGHT:
-                quantized[max_idx] = new_val
-            else:
-                # 重新分配
-                quantized = quantized / total
-
-        # 建立結果 Series
-        result = pd.Series(0.0, index=raw_weights.index)
-        result[quantized.index] = quantized
-
-        return result
-
-    @staticmethod
-    def apply_to_dataframe(position_df: pd.DataFrame, target_stocks: int = 20) -> pd.DataFrame:
-        """應用配比約束到整個 DataFrame"""
-        result = pd.DataFrame(0.0, index=position_df.index, columns=position_df.columns)
-
-        for date in position_df.index:
-            row = position_df.loc[date]
-            candidates = row[row > 0].sort_values(ascending=False)
-
-            if candidates.empty:
-                continue
-
-            # 限制持股數量
-            max_n = min(len(candidates), target_stocks, MAX_STOCKS)
-            selected = candidates.iloc[:max_n]
-
-            # 應用配比約束
-            normalized = PositionWeightManager.normalize_weights(selected)
-            result.loc[date, normalized.index] = normalized
-
-        return result
-
-weight_manager = PositionWeightManager()
-
-# =============================================================================
-# 第七部分：六大策略引擎
+# 第六部分：六大策略引擎
+# 注意：持股配比管理器已在第 4.6 部分提前定義
 # =============================================================================
 class DragonStrategyEngine:
     """
@@ -1700,12 +1696,24 @@ class ParetoArchiveManager:
                             'source': 'external'
                         })
 
-                # 格式C: {'population': [...]}
-                elif 'population' in external_data:
-                    for item in external_data['population']:
-                        gene_entry = self._parse_gene_item(item)
-                        if gene_entry:
-                            external_genes.append(gene_entry)
+                # 格式C: {'population': [...]} 和 {'halloffame': [...]}
+                # 🆕 優先解析 halloffame（DEAP 的精英庫，包含最佳個體）
+                elif 'population' in external_data or 'halloffame' in external_data:
+                    # 先解析 halloffame（最佳個體）
+                    if 'halloffame' in external_data:
+                        print(f"   🏆 解析 halloffame ({len(external_data['halloffame'])} 個精英)...")
+                        for item in external_data['halloffame']:
+                            gene_entry = self._parse_gene_item(item)
+                            if gene_entry:
+                                external_genes.append(gene_entry)
+
+                    # 再解析 population（補充更多多樣性）
+                    if 'population' in external_data and len(external_genes) < 20:
+                        print(f"   👥 解析 population ({len(external_data['population'])} 個個體)...")
+                        for item in external_data['population']:
+                            gene_entry = self._parse_gene_item(item)
+                            if gene_entry:
+                                external_genes.append(gene_entry)
 
                 # 格式D: {'archive': [...]}
                 elif 'archive' in external_data:
@@ -1734,10 +1742,10 @@ class ParetoArchiveManager:
                 # 去重
                 self.archive = self._deduplicate(self.archive)
 
-                # 保留前 100 名
+                # 保留前 100 名（使用安全的 fitness 計算）
                 self.archive = sorted(
                     self.archive,
-                    key=lambda x: sum(x.get('fitness', (0,0,0,0))),
+                    key=lambda x: self._safe_fitness_sum(x.get('fitness', 0)),
                     reverse=True
                 )[:100]
 
@@ -1829,11 +1837,21 @@ class ParetoArchiveManager:
         unique = self._deduplicate(all_individuals)
 
         # 排序保留前 50 名
-        unique.sort(key=lambda x: sum(x['fitness']), reverse=True)
+        unique.sort(key=lambda x: self._safe_fitness_sum(x.get('fitness', 0)), reverse=True)
         self.archive = unique[:50]
 
         # 保存
         self._save()
+
+    def _safe_fitness_sum(self, fitness) -> float:
+        """安全計算 fitness 總和（處理單一數字或元組）"""
+        if fitness is None:
+            return 0.0
+        if isinstance(fitness, (int, float)):
+            return float(fitness)
+        if isinstance(fitness, (list, tuple)):
+            return sum(float(f) for f in fitness)
+        return 0.0
 
     def _deduplicate(self, individuals: List[Dict]) -> List[Dict]:
         """去重"""
@@ -1869,7 +1887,7 @@ class ParetoArchiveManager:
         n_inject = min(n_inject, len(self.archive))
 
         # 選擇最佳精英
-        elites = sorted(self.archive, key=lambda x: sum(x['fitness']), reverse=True)[:n_inject]
+        elites = sorted(self.archive, key=lambda x: self._safe_fitness_sum(x.get('fitness', 0)), reverse=True)[:n_inject]
 
         # 替換族群中最差的個體
         population.sort(key=lambda ind: sum(ind.fitness.values) if ind.fitness.valid else -999)
@@ -1884,7 +1902,7 @@ class ParetoArchiveManager:
 
     def get_top_n(self, n: int = 5) -> List[Dict]:
         """獲取前 N 名"""
-        return sorted(self.archive, key=lambda x: sum(x['fitness']), reverse=True)[:n]
+        return sorted(self.archive, key=lambda x: self._safe_fitness_sum(x.get('fitness', 0)), reverse=True)[:n]
 
 pareto_archive = ParetoArchiveManager(paths.pareto_archive_file)
 
