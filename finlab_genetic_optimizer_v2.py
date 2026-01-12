@@ -268,7 +268,8 @@ class PathManager:
 
     @property
     def pareto_archive(self) -> str:
-        return f"{self.pareto_dir}/pareto_archive_dragon_w{self.window_id}.pkl"
+        # 🔥 與舊版本相容的檔名
+        return f"{self.pareto_dir}/pareto_archive_w{self.window_id}.pkl"
 
     @property
     def checkpoint_file(self) -> str:
