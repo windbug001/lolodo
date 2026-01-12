@@ -39,16 +39,26 @@ drive.mount('/content/drive')
 print("\n📦 安裝必要套件...")
 !pip install -q finlab deap joblib tqdm
 
-# ===== 下載最新版本 =====
+# ===== 建立目錄並下載最新版本 =====
 print("\n📥 下載最新版本...")
-REPO_BRANCH = "claude/genetic-algorithm-stock-optimizer-hoaRM"
-SCRIPT_URL = f"https://raw.githubusercontent.com/windbug001/lolodo/{REPO_BRANCH}/finlab_genetic_optimizer_v2.py"
 TARGET_DIR = "/content/drive/MyDrive/FinLab_GA_小小龍_v2"
 
-!mkdir -p "{TARGET_DIR}"
+# 🔥 先建立目錄
+import os
+os.makedirs(TARGET_DIR, exist_ok=True)
+
+# 下載腳本
+REPO_BRANCH = "claude/genetic-algorithm-stock-optimizer-hoaRM"
+SCRIPT_URL = f"https://raw.githubusercontent.com/windbug001/lolodo/{REPO_BRANCH}/finlab_genetic_optimizer_v2.py"
+
 !curl -sL "{SCRIPT_URL}" -o "{TARGET_DIR}/finlab_genetic_optimizer_v2.py"
 
-print(f"✅ 下載完成: {TARGET_DIR}/finlab_genetic_optimizer_v2.py")
+# 驗證下載
+if os.path.exists(f"{TARGET_DIR}/finlab_genetic_optimizer_v2.py"):
+    print(f"✅ 下載完成: {TARGET_DIR}/finlab_genetic_optimizer_v2.py")
+else:
+    print("❌ 下載失敗，請檢查網路連線")
+    raise FileNotFoundError("無法下載腳本")
 
 # ===== 執行優化 =====
 print("\n🚀 開始執行遺傳演算法優化...")
