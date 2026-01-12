@@ -1648,7 +1648,7 @@ class ParetoArchiveManager:
             print("ℹ️ 無歷史 Pareto Archive")
 
     def _load_external_genes(self):
-        """🆕 載入外部優秀基因"""
+        """🆕 載入外部優秀基因（支援多種格式）"""
         if not self.external_genes_path:
             return
 
@@ -1661,41 +1661,70 @@ class ParetoArchiveManager:
             with open(self.external_genes_path, 'rb') as f:
                 external_data = pickle.load(f)
 
+            # 🔍 調試：顯示檔案格式
+            print(f"   📋 檔案類型: {type(external_data).__name__}")
+            if isinstance(external_data, dict):
+                print(f"   📋 字典鍵: {list(external_data.keys())[:10]}")
+            elif isinstance(external_data, list):
+                print(f"   📋 列表長度: {len(external_data)}")
+                if external_data:
+                    first_item = external_data[0]
+                    print(f"   📋 第一項類型: {type(first_item).__name__}")
+                    if isinstance(first_item, dict):
+                        print(f"   📋 第一項鍵: {list(first_item.keys())}")
+
             # 支援多種格式
             external_genes = []
 
+            # ========== 格式解析 ==========
             if isinstance(external_data, list):
-                # 格式1: 直接是基因列表
                 for item in external_data:
-                    if isinstance(item, dict):
-                        if 'genes' in item:
-                            external_genes.append(item)
-                        elif 'individual' in item:
-                            # 格式2: {'individual': [...], 'fitness': (...)}
-                            external_genes.append({
-                                'genes': list(item['individual']),
-                                'fitness': item.get('fitness', (5.0, 5.0, 0.0, 2.0)),  # 預設高分
-                                'source': 'external'
-                            })
-                    elif isinstance(item, (list, np.ndarray)):
-                        # 格式3: 純基因陣列
-                        external_genes.append({
-                            'genes': list(item),
-                            'fitness': (5.0, 5.0, 0.0, 2.0),  # 預設高分
-                            'source': 'external'
-                        })
+                    gene_entry = self._parse_gene_item(item)
+                    if gene_entry:
+                        external_genes.append(gene_entry)
 
             elif isinstance(external_data, dict):
-                # 格式4: {'individuals': [...]} 或 {'genes': [...]}
+                # 格式A: {'individuals': [...]}
                 if 'individuals' in external_data:
-                    external_genes = external_data['individuals']
+                    for item in external_data['individuals']:
+                        gene_entry = self._parse_gene_item(item)
+                        if gene_entry:
+                            external_genes.append(gene_entry)
+
+                # 格式B: {'genes': [...]}
                 elif 'genes' in external_data:
                     for gene in external_data['genes']:
                         external_genes.append({
-                            'genes': list(gene),
+                            'genes': list(gene) if hasattr(gene, '__iter__') else gene,
                             'fitness': (5.0, 5.0, 0.0, 2.0),
                             'source': 'external'
                         })
+
+                # 格式C: {'population': [...]}
+                elif 'population' in external_data:
+                    for item in external_data['population']:
+                        gene_entry = self._parse_gene_item(item)
+                        if gene_entry:
+                            external_genes.append(gene_entry)
+
+                # 格式D: {'archive': [...]}
+                elif 'archive' in external_data:
+                    for item in external_data['archive']:
+                        gene_entry = self._parse_gene_item(item)
+                        if gene_entry:
+                            external_genes.append(gene_entry)
+
+                # 格式E: {'best': [...]} 或其他
+                else:
+                    for key, value in external_data.items():
+                        if isinstance(value, list) and len(value) > 0:
+                            print(f"   🔍 嘗試解析鍵 '{key}'...")
+                            for item in value:
+                                gene_entry = self._parse_gene_item(item)
+                                if gene_entry:
+                                    external_genes.append(gene_entry)
+                            if external_genes:
+                                break
 
             if external_genes:
                 # 合併到 archive（外部基因優先）
@@ -1705,7 +1734,7 @@ class ParetoArchiveManager:
                 # 去重
                 self.archive = self._deduplicate(self.archive)
 
-                # 保留前 100 名（因為有外部基因，增加容量）
+                # 保留前 100 名
                 self.archive = sorted(
                     self.archive,
                     key=lambda x: sum(x.get('fitness', (0,0,0,0))),
@@ -1720,10 +1749,71 @@ class ParetoArchiveManager:
                 self._save()
             else:
                 print(f"   ⚠️ 外部基因檔案格式無法識別")
+                print(f"   💡 請提供檔案格式資訊以便支援")
 
         except Exception as e:
             print(f"⚠️ 外部基因載入失敗: {e}")
             traceback.print_exc()
+
+    def _parse_gene_item(self, item) -> Optional[Dict]:
+        """解析單個基因項目（支援多種格式）"""
+        try:
+            # 格式1: 已經是標準格式 {'genes': [...], 'fitness': (...)}
+            if isinstance(item, dict):
+                if 'genes' in item:
+                    genes = list(item['genes']) if hasattr(item['genes'], '__iter__') else item['genes']
+                    fitness = item.get('fitness', (5.0, 5.0, 0.0, 2.0))
+                    return {'genes': genes, 'fitness': fitness, 'source': 'external'}
+
+                # 格式2: {'individual': [...], ...}
+                elif 'individual' in item:
+                    genes = list(item['individual'])
+                    fitness = item.get('fitness', (5.0, 5.0, 0.0, 2.0))
+                    return {'genes': genes, 'fitness': fitness, 'source': 'external'}
+
+                # 格式3: {'chromosome': [...], ...}
+                elif 'chromosome' in item:
+                    genes = list(item['chromosome'])
+                    fitness = item.get('fitness', (5.0, 5.0, 0.0, 2.0))
+                    return {'genes': genes, 'fitness': fitness, 'source': 'external'}
+
+                # 格式4: {'params': {...}, ...} - 參數字典
+                elif 'params' in item:
+                    # 需要反向編碼，暫時跳過
+                    return None
+
+                # 格式5: DEAP Individual 序列化格式
+                elif len(item) > 0:
+                    # 嘗試找到數值列表
+                    for key, value in item.items():
+                        if isinstance(value, (list, np.ndarray)) and len(value) >= 30:
+                            if all(isinstance(v, (int, float)) for v in value[:10]):
+                                return {
+                                    'genes': list(value),
+                                    'fitness': item.get('fitness', (5.0, 5.0, 0.0, 2.0)),
+                                    'source': 'external'
+                                }
+
+            # 格式6: 純數值列表/陣列
+            elif isinstance(item, (list, np.ndarray)):
+                if len(item) >= 30:  # 基因長度至少 30
+                    if all(isinstance(v, (int, float)) for v in list(item)[:10]):
+                        return {
+                            'genes': list(item),
+                            'fitness': (5.0, 5.0, 0.0, 2.0),
+                            'source': 'external'
+                        }
+
+            # 格式7: DEAP creator.Individual 物件
+            elif hasattr(item, 'fitness') and hasattr(item, '__iter__'):
+                genes = list(item)
+                fitness = item.fitness.values if hasattr(item.fitness, 'values') else (5.0, 5.0, 0.0, 2.0)
+                return {'genes': genes, 'fitness': fitness, 'source': 'external'}
+
+        except Exception as e:
+            pass
+
+        return None
 
     def update(self, pareto_front: List):
         """更新 Pareto Archive"""
