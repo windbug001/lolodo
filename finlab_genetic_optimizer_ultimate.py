@@ -1612,15 +1612,15 @@ class HistoryValidator:
             diff_pct = diff / (abs(original_composite) + 1e-10) * 100
 
             # 判斷是否一致（允許 10% 誤差）
-            is_valid = diff_pct < 10
+            is_valid = bool(diff_pct < 10)  # 轉換為 Python 原生 bool
 
             result = {
-                'rank': i,
-                'original_fitness': original_fitness,
-                'new_fitness': new_fitness,
-                'original_composite': round(original_composite, 4),
-                'new_composite': round(new_composite, 4),
-                'diff_pct': round(diff_pct, 2),
+                'rank': int(i),
+                'original_fitness': [float(x) for x in original_fitness],
+                'new_fitness': [float(x) for x in new_fitness],
+                'original_composite': float(round(original_composite, 4)),
+                'new_composite': float(round(new_composite, 4)),
+                'diff_pct': float(round(diff_pct, 2)),
                 'is_valid': is_valid,
             }
             validation_results.append(result)
@@ -1636,7 +1636,7 @@ class HistoryValidator:
             json.dump({
                 'timestamp': datetime.now().isoformat(),
                 'results': validation_results,
-                'all_valid': all_valid,
+                'all_valid': bool(all_valid),  # 確保是 Python 原生 bool
             }, f, indent=2, ensure_ascii=False)
 
         if all_valid:
