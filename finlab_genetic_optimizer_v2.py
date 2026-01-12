@@ -230,7 +230,7 @@ def setup_environment():
     try:
         from google.colab import drive
         drive.mount('/content/drive', force_remount=False)
-        base_dir = '/content/drive/MyDrive/FinLab_GA_小小龍_v2'
+        base_dir = '/content/drive/MyDrive/FinLab_GA_優化_終極版'
         in_colab = True
         print("✅ Google Drive 已掛載")
     except:
