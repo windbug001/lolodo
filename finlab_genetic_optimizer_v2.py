@@ -464,17 +464,18 @@ class PositionWeightManager:
         if position is None or position.empty:
             return position
 
-        # 複製以避免修改原始數據
-        adjusted = position.copy()
+        # 🔥 確保是 float 類型
+        adjusted = position.astype(float).copy()
 
         # 逐行處理
         for idx in adjusted.index:
-            row = adjusted.loc[idx]
+            row = adjusted.loc[idx].astype(float)
 
             # 計算總權重
-            total = row.sum()
+            total = float(row.sum())
 
             if total <= 0:
+                adjusted.loc[idx] = 0.0
                 continue
 
             # 正規化
@@ -482,10 +483,10 @@ class PositionWeightManager:
 
             # 應用最低權重限制：低於 3% 設為 0
             filtered = normalized.copy()
-            filtered[filtered < self.min_weight] = 0
+            filtered[filtered < self.min_weight] = 0.0
 
             # 重新正規化
-            new_total = filtered.sum()
+            new_total = float(filtered.sum())
             if new_total > 0:
                 filtered = filtered / new_total
 
@@ -493,16 +494,17 @@ class PositionWeightManager:
                 quantized = (filtered / self.weight_step).round() * self.weight_step
 
                 # 確保總和為 1（調整最大權重）
-                diff = 1.0 - quantized.sum()
-                if diff != 0 and quantized.max() > 0:
+                diff = 1.0 - float(quantized.sum())
+                if abs(diff) > 0.001 and float(quantized.max()) > 0:
                     max_idx = quantized.idxmax()
                     quantized[max_idx] += diff
 
-                adjusted.loc[idx] = quantized
+                adjusted.loc[idx] = quantized.astype(float)
             else:
-                adjusted.loc[idx] = 0
+                adjusted.loc[idx] = 0.0
 
-        return adjusted
+        # 🔥 確保返回的是 float 類型
+        return adjusted.astype(float)
 
     def get_position_summary(self, position: pd.DataFrame) -> Dict:
         """獲取持股摘要統計"""
@@ -851,6 +853,24 @@ class StrategyEngine:
             pos_si = self.strategy_small_investor(params)
             pos_rpt = self.strategy_revenue_price_turbo(params)
 
+            # 🔥 確保所有 position 都是 numeric 類型
+            def ensure_numeric(pos):
+                if pos is None:
+                    return None
+                # 轉換布林值為浮點數
+                pos = pos.astype(float)
+                # 填充 NaN 為 0
+                pos = pos.fillna(0)
+                return pos
+
+            pos_lv = ensure_numeric(pos_lv)
+            pos_si = ensure_numeric(pos_si)
+            pos_rpt = ensure_numeric(pos_rpt)
+
+            # 檢查是否有有效數據
+            if pos_lv is None and pos_si is None and pos_rpt is None:
+                return None
+
             # 獲取權重
             weight_lv = params['weight_lv']
             weight_si = params['weight_si']
@@ -862,12 +882,46 @@ class StrategyEngine:
             weight_si /= total_weight
             weight_rpt /= total_weight
 
-            # 合併
-            position_combined = (
-                pos_lv * weight_lv +
-                pos_si * weight_si +
-                pos_rpt * weight_rpt
-            )
+            # 🔥 對齊索引並合併
+            # 收集所有非空的 position
+            positions = []
+            weights = []
+            if pos_lv is not None and not pos_lv.empty:
+                positions.append(pos_lv)
+                weights.append(weight_lv)
+            if pos_si is not None and not pos_si.empty:
+                positions.append(pos_si)
+                weights.append(weight_si)
+            if pos_rpt is not None and not pos_rpt.empty:
+                positions.append(pos_rpt)
+                weights.append(weight_rpt)
+
+            if not positions:
+                return None
+
+            # 重新正規化權重
+            total_w = sum(weights)
+            weights = [w / total_w for w in weights]
+
+            # 獲取共同的索引和欄位
+            all_dates = positions[0].index
+            all_cols = set(positions[0].columns)
+            for pos in positions[1:]:
+                all_dates = all_dates.union(pos.index)
+                all_cols = all_cols.union(set(pos.columns))
+            all_cols = list(all_cols)
+
+            # 初始化合併結果
+            position_combined = pd.DataFrame(0.0, index=all_dates, columns=all_cols)
+
+            # 加權合併
+            for pos, w in zip(positions, weights):
+                # 對齊並填充
+                pos_aligned = pos.reindex(index=all_dates, columns=all_cols, fill_value=0)
+                position_combined = position_combined + pos_aligned * w
+
+            # 確保是 float 類型
+            position_combined = position_combined.astype(float)
 
             # 🔥 應用 3% 最低權重限制
             if apply_weight_constraint:
@@ -877,6 +931,8 @@ class StrategyEngine:
 
         except Exception as e:
             print(f"   ⚠️ 策略合併失敗: {e}")
+            import traceback
+            traceback.print_exc()
             return None
 
 # 初始化策略引擎
