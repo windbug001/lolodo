@@ -119,6 +119,12 @@ WINDOW_ID = int(os.environ.get('WINDOW_ID', '1'))
 CONTINUE_EVOLUTION = os.environ.get('CONTINUE_EVOLUTION', 'true').lower() == 'true'
 N_GENERATIONS = int(os.environ.get('EVOLUTION_GENERATIONS', '500'))
 
+# 🧬 外部優秀基因路徑（可從環境變數設定）
+EXTERNAL_GENES_PATH = os.environ.get(
+    'EXTERNAL_GENES_PATH',
+    '/content/drive/MyDrive/投資策略優化_六策略_修正版_2014/回測結果/篩選_前5名_20260108_1519/top5_genes_for_evolution.pkl'
+)
+
 # FinLab API Key（請替換為你的 VIP Key）
 FINLAB_API_KEY = "R5XcZHGBZgEO5zz+6e1iYAe3wcFiimTUNaCMKsnZEiM42Wp49xW46MySUZT1W/Ee#vip_m"
 
@@ -164,6 +170,7 @@ print(f"""
 🎯 目標夏普: > {TARGET_SHARPE}
 📉 最大回撤: < {MAX_MDD*100:.0f}%
 💰 胃納目標: > {MIN_CAPACITY/1e7:.0f}00 萬
+🧬 外部優秀基因: {EXTERNAL_GENES_PATH}
 {'='*80}
 """)
 
@@ -1613,12 +1620,15 @@ class ParetoArchiveManager:
     1. 保存歷史最佳個體
     2. 精英注入新族群
     3. 跨視窗共享
+    4. 🆕 匯入外部優秀基因
     """
 
-    def __init__(self, archive_file: str):
+    def __init__(self, archive_file: str, external_genes_path: str = None):
         self.archive_file = archive_file
+        self.external_genes_path = external_genes_path or EXTERNAL_GENES_PATH
         self.archive = []
         self._load()
+        self._load_external_genes()  # 🆕 自動匯入外部基因
 
     def _load(self):
         """載入歷史 Pareto Archive"""
@@ -1633,6 +1643,84 @@ class ParetoArchiveManager:
                 self.archive = []
         else:
             print("ℹ️ 無歷史 Pareto Archive")
+
+    def _load_external_genes(self):
+        """🆕 載入外部優秀基因"""
+        if not self.external_genes_path:
+            return
+
+        if not os.path.exists(self.external_genes_path):
+            print(f"ℹ️ 外部基因檔案不存在: {self.external_genes_path}")
+            return
+
+        try:
+            print(f"🧬 載入外部優秀基因: {self.external_genes_path}")
+            with open(self.external_genes_path, 'rb') as f:
+                external_data = pickle.load(f)
+
+            # 支援多種格式
+            external_genes = []
+
+            if isinstance(external_data, list):
+                # 格式1: 直接是基因列表
+                for item in external_data:
+                    if isinstance(item, dict):
+                        if 'genes' in item:
+                            external_genes.append(item)
+                        elif 'individual' in item:
+                            # 格式2: {'individual': [...], 'fitness': (...)}
+                            external_genes.append({
+                                'genes': list(item['individual']),
+                                'fitness': item.get('fitness', (5.0, 5.0, 0.0, 2.0)),  # 預設高分
+                                'source': 'external'
+                            })
+                    elif isinstance(item, (list, np.ndarray)):
+                        # 格式3: 純基因陣列
+                        external_genes.append({
+                            'genes': list(item),
+                            'fitness': (5.0, 5.0, 0.0, 2.0),  # 預設高分
+                            'source': 'external'
+                        })
+
+            elif isinstance(external_data, dict):
+                # 格式4: {'individuals': [...]} 或 {'genes': [...]}
+                if 'individuals' in external_data:
+                    external_genes = external_data['individuals']
+                elif 'genes' in external_data:
+                    for gene in external_data['genes']:
+                        external_genes.append({
+                            'genes': list(gene),
+                            'fitness': (5.0, 5.0, 0.0, 2.0),
+                            'source': 'external'
+                        })
+
+            if external_genes:
+                # 合併到 archive（外部基因優先）
+                before_count = len(self.archive)
+                self.archive = external_genes + self.archive
+
+                # 去重
+                self.archive = self._deduplicate(self.archive)
+
+                # 保留前 100 名（因為有外部基因，增加容量）
+                self.archive = sorted(
+                    self.archive,
+                    key=lambda x: sum(x.get('fitness', (0,0,0,0))),
+                    reverse=True
+                )[:100]
+
+                added_count = len(external_genes)
+                print(f"   ✅ 匯入 {added_count} 個外部優秀基因")
+                print(f"   📊 Archive 總數: {before_count} → {len(self.archive)}")
+
+                # 保存更新後的 Archive
+                self._save()
+            else:
+                print(f"   ⚠️ 外部基因檔案格式無法識別")
+
+        except Exception as e:
+            print(f"⚠️ 外部基因載入失敗: {e}")
+            traceback.print_exc()
 
     def update(self, pareto_front: List):
         """更新 Pareto Archive"""
