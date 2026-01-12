@@ -24,15 +24,16 @@ conditions = condition1 & condition2 & condition3
 position = rev_yoy_growth * conditions
 position = position[position>0].is_largest(10).reindex(rev.index_str_to_date().index, method='ffill')
 
-# 從2017年開始回測
+# 從2017年開始回測 - 過濾 position 日期範圍
+position = position.loc['2017-01-01':]
+
 report = sim(
     position=position,
     stop_loss=0.2,
     take_profit=0.8,
     position_limit=0.25,
     fee_ratio=1.425/1000*0.3,
-    name="營收股價雙渦輪",
-    start_date='2017-01-01'
+    name="營收股價雙渦輪"
 )
 
 # 顯示績效指標
