@@ -283,6 +283,108 @@ paths = PathManager()
 print(f"📁 工作目錄: {paths.window_dir}")
 
 # =============================================================================
+# 🔥 第 4.5 部分：基因解碼器（提前定義，避免順序問題）
+# =============================================================================
+class DragonGeneDecoder:
+    """
+    🧬 龍族基因解碼器（提前定義版本）
+
+    基因長度：80
+    - 策略一參數：0-9 (10)
+    - 策略二參數：10-19 (10)
+    - 策略三參數：20-29 (10)
+    - 策略四參數：30-39 (10)
+    - 策略五參數：40-49 (10)
+    - 策略六參數：50-59 (10)
+    - 策略權重：60-65 (6)
+    - 回測參數：66-73 (8)
+    - 保留：74-79 (6)
+    """
+
+    GENE_LENGTH = 80
+
+    def decode(self, genes: List[float]) -> Dict[str, Any]:
+        """解碼基因為策略參數"""
+        # 確保基因長度
+        if len(genes) < self.GENE_LENGTH:
+            genes = list(genes) + [0.5] * (self.GENE_LENGTH - len(genes))
+        genes = genes[:self.GENE_LENGTH]
+
+        params = {}
+
+        # === 策略一：低波動本益比 (0-9) ===
+        params['lv_rev_ratio'] = genes[0] * 0.5 + 1.0        # 1.0-1.5
+        params['lv_vol_threshold'] = genes[1] * 0.05 + 0.02  # 0.02-0.07
+        params['lv_margin_limit'] = genes[2] * 30 + 20       # 20-50
+        params['lv_non_op_limit'] = genes[3] * 10 + 5        # 5-15
+        params['lv_pe_min'] = genes[4] * 10 + 3              # 3-13
+        params['lv_pe_max'] = genes[5] * 20 + 15             # 15-35
+        params['lv_top_n'] = int(genes[6] * 6 + 2)           # 2-8
+
+        # === 策略二：小資族成長 (10-19) ===
+        params['sc_mv_limit'] = genes[10] * 15e9 + 5e9       # 50億-200億
+        params['sc_mv_rev_ratio'] = genes[11] * 3 + 2        # 2-5
+        params['sc_rev_yoy_limit'] = genes[12] * 10 - 15     # -15 to -5
+        params['sc_rev_mom_limit'] = genes[13] * 30 - 70     # -70 to -40
+        params['sc_rsv_period'] = int(genes[14] * 30 + 40)   # 40-70
+        params['sc_ma_period'] = int(genes[15] * 40 + 50)    # 50-90
+        params['sc_top_n'] = int(genes[16] * 6 + 4)          # 4-10
+
+        # === 策略三：營收股價雙渦輪 (20-29) ===
+        params['rpt_rev_ma'] = int(genes[20] * 5 + 3)        # 3-8
+        params['rpt_lookback'] = int(genes[21] * 15 + 15)    # 15-30
+        params['rpt_price_window'] = int(genes[22] * 8 + 4)  # 4-12
+        params['rpt_min_vol'] = genes[23] * 300000 + 150000  # 15萬-45萬
+        params['rpt_min_price'] = genes[24] * 15 + 10        # 10-25
+        params['rpt_rsi'] = genes[25] * 20 + 50              # 50-70
+        params['rpt_pe_limit'] = genes[26] * 100 + 100       # 100-200
+        params['rpt_top_n'] = int(genes[27] * 10 + 8)        # 8-18
+
+        # === 策略四：高殖利率防禦 (30-39) ===
+        params['hd_div_min'] = genes[30] * 4 + 3             # 3-7%
+        params['hd_vol_max'] = genes[31] * 0.2 + 0.15        # 0.15-0.35
+        params['hd_pe_max'] = genes[32] * 15 + 10            # 10-25
+        params['hd_roe_min'] = genes[33] * 10 + 5            # 5-15%
+        params['hd_top_n'] = int(genes[34] * 6 + 4)          # 4-10
+
+        # === 策略五：動能突破 (40-49) ===
+        params['mb_mom_threshold'] = genes[40] * 0.2 + 0.05  # 0.05-0.25
+        params['mb_vol_ratio'] = genes[41] * 1.5 + 1.0       # 1.0-2.5
+        params['mb_rsi_min'] = genes[42] * 20 + 40           # 40-60
+        params['mb_rsi_max'] = genes[43] * 15 + 70           # 70-85
+        params['mb_top_n'] = int(genes[44] * 8 + 5)          # 5-13
+
+        # === 策略六：價值成長混合 (50-59) ===
+        params['vg_pe_pct'] = genes[50] * 0.3 + 0.2          # 0.2-0.5
+        params['vg_pb_pct'] = genes[51] * 0.3 + 0.3          # 0.3-0.6
+        params['vg_growth'] = genes[52] * 20 + 5             # 5-25%
+        params['vg_roe_min'] = genes[53] * 10 + 5            # 5-15%
+        params['vg_top_n'] = int(genes[54] * 8 + 5)          # 5-13
+
+        # === 策略權重 (60-65) ===
+        raw_weights = genes[60:66]
+        total = sum(raw_weights) + 1e-10
+        params['weight_lv'] = raw_weights[0] / total
+        params['weight_sc'] = raw_weights[1] / total
+        params['weight_rpt'] = raw_weights[2] / total
+        params['weight_hd'] = raw_weights[3] / total
+        params['weight_mb'] = raw_weights[4] / total
+        params['weight_vg'] = raw_weights[5] / total
+
+        # === 回測參數 (66-73) ===
+        params['stop_loss'] = genes[66] * 0.15 + 0.15        # 15%-30%
+        params['trail_stop'] = genes[67] * 0.2 + 0.2         # 20%-40%
+        params['take_profit'] = genes[68] * 0.4 + 0.5        # 50%-90%
+        params['position_limit'] = genes[69] * 0.15 + 0.25   # 25%-40%
+        params['target_stocks'] = int(genes[70] * 15 + 10)   # 10-25
+
+        return params
+
+# 🔥 提前初始化 gene_decoder（確保在任何評估之前就存在）
+gene_decoder = DragonGeneDecoder()
+print(f"✅ 基因解碼器初始化完成 (長度: {DragonGeneDecoder.GENE_LENGTH})")
+
+# =============================================================================
 # 第五部分：數據載入器（單例模式）
 # =============================================================================
 class DragonDataLoader:
@@ -1126,107 +1228,8 @@ class DragonStrategyEngine:
 strategy_engine = DragonStrategyEngine(data_loader)
 
 # =============================================================================
-# 第八部分：基因解碼器
-# =============================================================================
-class DragonGeneDecoder:
-    """
-    🧬 龍族基因解碼器
-
-    基因長度：80
-    - 策略一參數：0-9 (10)
-    - 策略二參數：10-19 (10)
-    - 策略三參數：20-29 (10)
-    - 策略四參數：30-39 (10)
-    - 策略五參數：40-49 (10)
-    - 策略六參數：50-59 (10)
-    - 策略權重：60-65 (6)
-    - 回測參數：66-73 (8)
-    - 保留：74-79 (6)
-    """
-
-    GENE_LENGTH = 80
-
-    def decode(self, genes: List[float]) -> Dict[str, Any]:
-        """解碼基因為策略參數"""
-        # 確保基因長度
-        if len(genes) < self.GENE_LENGTH:
-            genes = list(genes) + [0.5] * (self.GENE_LENGTH - len(genes))
-        genes = genes[:self.GENE_LENGTH]
-
-        params = {}
-
-        # === 策略一：低波動本益比 (0-9) ===
-        params['lv_rev_ratio'] = genes[0] * 0.5 + 1.0        # 1.0-1.5
-        params['lv_vol_threshold'] = genes[1] * 0.05 + 0.02  # 0.02-0.07
-        params['lv_margin_limit'] = genes[2] * 30 + 20       # 20-50
-        params['lv_non_op_limit'] = genes[3] * 10 + 5        # 5-15
-        params['lv_pe_min'] = genes[4] * 10 + 3              # 3-13
-        params['lv_pe_max'] = genes[5] * 20 + 15             # 15-35
-        params['lv_top_n'] = int(genes[6] * 6 + 2)           # 2-8
-
-        # === 策略二：小資族成長 (10-19) ===
-        params['sc_mv_limit'] = genes[10] * 15e9 + 5e9       # 50億-200億
-        params['sc_mv_rev_ratio'] = genes[11] * 3 + 2        # 2-5
-        params['sc_rev_yoy_limit'] = genes[12] * 10 - 15     # -15 to -5
-        params['sc_rev_mom_limit'] = genes[13] * 30 - 70     # -70 to -40
-        params['sc_rsv_period'] = int(genes[14] * 30 + 40)   # 40-70
-        params['sc_ma_period'] = int(genes[15] * 40 + 50)    # 50-90
-        params['sc_top_n'] = int(genes[16] * 6 + 4)          # 4-10
-
-        # === 策略三：營收股價雙渦輪 (20-29) ===
-        params['rpt_rev_ma'] = int(genes[20] * 5 + 3)        # 3-8
-        params['rpt_lookback'] = int(genes[21] * 15 + 15)    # 15-30
-        params['rpt_price_window'] = int(genes[22] * 8 + 4)  # 4-12
-        params['rpt_min_vol'] = genes[23] * 300000 + 150000  # 15萬-45萬
-        params['rpt_min_price'] = genes[24] * 15 + 10        # 10-25
-        params['rpt_rsi'] = genes[25] * 20 + 50              # 50-70
-        params['rpt_pe_limit'] = genes[26] * 100 + 100       # 100-200
-        params['rpt_top_n'] = int(genes[27] * 10 + 8)        # 8-18
-
-        # === 策略四：高殖利率防禦 (30-39) ===
-        params['hd_div_min'] = genes[30] * 4 + 3             # 3-7%
-        params['hd_vol_max'] = genes[31] * 0.2 + 0.15        # 0.15-0.35
-        params['hd_pe_max'] = genes[32] * 15 + 10            # 10-25
-        params['hd_roe_min'] = genes[33] * 10 + 5            # 5-15%
-        params['hd_top_n'] = int(genes[34] * 6 + 4)          # 4-10
-
-        # === 策略五：動能突破 (40-49) ===
-        params['mb_mom_threshold'] = genes[40] * 0.2 + 0.05  # 0.05-0.25
-        params['mb_vol_ratio'] = genes[41] * 1.5 + 1.0       # 1.0-2.5
-        params['mb_rsi_min'] = genes[42] * 20 + 40           # 40-60
-        params['mb_rsi_max'] = genes[43] * 15 + 70           # 70-85
-        params['mb_top_n'] = int(genes[44] * 8 + 5)          # 5-13
-
-        # === 策略六：價值成長混合 (50-59) ===
-        params['vg_pe_pct'] = genes[50] * 0.3 + 0.2          # 0.2-0.5
-        params['vg_pb_pct'] = genes[51] * 0.3 + 0.3          # 0.3-0.6
-        params['vg_growth'] = genes[52] * 20 + 5             # 5-25%
-        params['vg_roe_min'] = genes[53] * 10 + 5            # 5-15%
-        params['vg_top_n'] = int(genes[54] * 8 + 5)          # 5-13
-
-        # === 策略權重 (60-65) ===
-        raw_weights = genes[60:66]
-        total = sum(raw_weights) + 1e-10
-        params['weight_lv'] = raw_weights[0] / total
-        params['weight_sc'] = raw_weights[1] / total
-        params['weight_rpt'] = raw_weights[2] / total
-        params['weight_hd'] = raw_weights[3] / total
-        params['weight_mb'] = raw_weights[4] / total
-        params['weight_vg'] = raw_weights[5] / total
-
-        # === 回測參數 (66-73) ===
-        params['stop_loss'] = genes[66] * 0.15 + 0.15        # 15%-30%
-        params['trail_stop'] = genes[67] * 0.2 + 0.2         # 20%-40%
-        params['take_profit'] = genes[68] * 0.4 + 0.5        # 50%-90%
-        params['position_limit'] = genes[69] * 0.15 + 0.25   # 25%-40%
-        params['target_stocks'] = int(genes[70] * 15 + 10)   # 10-25
-
-        return params
-
-gene_decoder = DragonGeneDecoder()
-
-# =============================================================================
-# 第九部分：回測引擎（In-Sample / Out-of-Sample 分離）
+# 第八部分：回測引擎（In-Sample / Out-of-Sample 分離）
+# 注意：基因解碼器已在第 4.5 部分提前定義
 # =============================================================================
 class DragonBacktestEngine:
     """
