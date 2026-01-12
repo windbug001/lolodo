@@ -647,7 +647,8 @@ class StrategyEngine:
 
         # 選出符合條件且PEG最小的top_n檔
         position = peg[cond_all & (peg > 0)].is_smallest(top_n).reindex(rev.index_str_to_date().index, method='ffill')
-        return position
+        # 🔥 強制轉換為 float 類型
+        return position.astype(float).fillna(0)
 
     def strategy_small_investor(self, params: Dict) -> Any:
         """
@@ -728,7 +729,8 @@ class StrategyEngine:
                 * rsv).is_largest(top_n)
 
         position = position.reindex(當月營收.index_str_to_date().index)
-        return position
+        # 🔥 強制轉換為 float 類型
+        return position.astype(float).fillna(0)
 
     def strategy_revenue_price_turbo(self, params: Dict) -> Any:
         """
@@ -837,7 +839,8 @@ class StrategyEngine:
         # 選出符合條件且年增率最高的top_n檔
         position = rev_yoy_growth * conditions
         position = position[position > 0].is_largest(top_n).reindex(rev.index_str_to_date().index, method="ffill")
-        return position
+        # 🔥 強制轉換為 float 類型
+        return position.astype(float).fillna(0)
 
     def combine_strategies(self, params: Dict, apply_weight_constraint: bool = True) -> Any:
         """
