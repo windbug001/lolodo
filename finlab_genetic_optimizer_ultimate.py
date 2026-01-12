@@ -1837,6 +1837,7 @@ class EvolutionEngine:
 
         start_gen = 0
         population = None
+        end_gen = n_generations  # 目標世代數
 
         # 嘗試從檢查點恢復
         if resume:
@@ -1850,7 +1851,13 @@ class EvolutionEngine:
                         checkpoint, self.toolbox
                     )
                     start_gen += 1  # 從下一代開始
-                    print(f"✅ 從第 {start_gen} 代繼續演化")
+
+                    # 🔥 修正：如果檢查點世代 >= 目標世代，則從當前位置繼續演化 n_generations 代
+                    if start_gen >= n_generations:
+                        end_gen = start_gen + n_generations
+                        print(f"✅ 檢查點已達 {start_gen-1} 代，將繼續演化到第 {end_gen} 代")
+                    else:
+                        print(f"✅ 從第 {start_gen} 代繼續演化")
                 else:
                     print("⚠️ 歷史驗證不通過，將重新評估族群")
 
@@ -1864,7 +1871,7 @@ class EvolutionEngine:
         population = self._evaluate_population(population)
 
         # 演化循環
-        for gen in range(start_gen, n_generations):
+        for gen in range(start_gen, end_gen):
             gen_start_time = time.time()
 
             # 選擇
@@ -1897,11 +1904,11 @@ class EvolutionEngine:
             elapsed = time.time() - gen_start_time
 
             # 記錄進度
-            self.logger.log_generation(gen, n_generations, stats, elapsed)
+            self.logger.log_generation(gen, end_gen, stats, elapsed)
 
             # 輸出進度
             if (gen + 1) % 5 == 0 or gen == 0:
-                self._print_progress(gen, n_generations, stats, elapsed)
+                self._print_progress(gen, end_gen, stats, elapsed)
 
             # 檢查點
             if (gen + 1) % CHECKPOINT_INTERVAL == 0:
@@ -1919,7 +1926,7 @@ class EvolutionEngine:
         self.pareto_mgr.update(pareto_front)
 
         # 最終檢查點
-        checkpoint_mgr.save(n_generations - 1, population, self.history)
+        checkpoint_mgr.save(end_gen - 1, population, self.history)
 
         # 輸出結果
         self._print_pareto_front(pareto_front)
