@@ -1367,6 +1367,70 @@ def main():
 ╚════════════════════════════════════════════════════════════════╝
     """)
 
+    # 🔥 開始演化前，先回測歷史最佳並上傳到 FinLab
+    if pareto_archive.archive:
+        print(f"\n{'='*70}")
+        print("📜 回測歷史最佳策略並上傳到 FinLab")
+        print(f"{'='*70}")
+
+        # 取出歷史最佳個體
+        best_historical = max(pareto_archive.archive, key=lambda x: sum(x['fitness']))
+        best_genes = best_historical['genes']
+        best_fitness = best_historical['fitness']
+
+        print(f"   歷史最佳適應度: {sum(best_fitness):.4f}")
+        print(f"   (夏普分數={best_fitness[0]:.2f}, 胃納量分數={best_fitness[1]:.2f})")
+
+        try:
+            # 解碼並回測
+            hist_params = gene_decoder.decode(best_genes)
+            print(f"\n   策略權重：低波動 {hist_params['weight_lv']:.2%}, "
+                  f"小資族 {hist_params['weight_si']:.2%}, "
+                  f"雙渦輪 {hist_params['weight_rpt']:.2%}")
+
+            position = strategy_engine.combine_strategies(hist_params)
+
+            if position is not None and not position.empty:
+                print(f"\n   🚀 執行完整回測並上傳...")
+
+                report = sim(
+                    position=position,
+                    fee_ratio=1.425 / 1000,
+                    tax_ratio=3 / 1000,
+                    trade_at_price="high_low_avg",
+                    position_limit=hist_params.get('position_limit', 0.35),
+                    stop_loss=hist_params.get('stop_loss', 0.25),
+                    trail_stop=hist_params.get('trail_stop', 0.35),
+                    take_profit=hist_params.get('take_profit', 0.75),
+                    stop_trading_next_period=False,
+                    upload=True,  # 🔥 上傳到 FinLab
+                    name=f'GA_W{WINDOW_ID}_歷史最佳_演化前'
+                )
+
+                metrics = report.get_metrics()
+                sharpe = metrics['ratio'].get('sharpeRatio', 0) or 0
+                mdd = abs(metrics['risk'].get('maxDrawdown', 0)) * 100
+                annual_ret = (metrics['profitability'].get('annualReturn', 0) or 0) * 100
+
+                print(f"\n   ✅ 歷史最佳回測結果：")
+                print(f"      夏普值: {sharpe:.2f}")
+                print(f"      年化報酬: {annual_ret:.1f}%")
+                print(f"      最大回撤: {mdd:.1f}%")
+                print(f"\n   📤 已上傳到 FinLab！")
+            else:
+                print(f"   ⚠️ 歷史最佳策略產生空部位，跳過回測")
+
+        except Exception as e:
+            print(f"   ⚠️ 歷史最佳回測失敗: {e}")
+            import traceback
+            traceback.print_exc()
+
+        print(f"\n{'='*70}")
+        print("🧬 開始新一輪演化...")
+        print(f"{'='*70}\n")
+    else:
+        print("\n📭 無歷史最佳記錄，直接開始演化\n")
+
     # 建立演化引擎
     engine = EvolutionEngine(toolbox, pareto_archive)
 
