@@ -1196,6 +1196,10 @@ class EvolutionEngine:
         # 初始評估
         population = self._evaluate_population(population)
 
+        # 🔥 開始演化前先做一次完整回測（第 0 代基準）
+        print(f"\n🔍 初始評估完成，執行第 0 代基準回測...")
+        self._run_full_backtest(population, 0)
+
         # 演化循環
         for gen in range(n_generations):
             start_time = time.time()
