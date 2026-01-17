@@ -987,8 +987,21 @@ def evaluate_fitness(individual: List[float]) -> Tuple[float, float, float, floa
         annual_return = overall['annual_return']
         max_drawdown = overall['max_drawdown']  # 🔥 獲取 MDD
 
-        # 夏普值分數（0-5）
+        # 夏普值分數（0-5）+ 額外獎勵
         sharpe_score = min(5.0, max(0, sharpe / TARGET_SHARPE * 5.0))
+
+        # 🔥 夏普值 > 2.9 額外加分獎勵
+        if sharpe > 2.9:
+            excess_sharpe = sharpe - 2.9
+            if sharpe <= 3.5:
+                # 2.9-3.5：每超過 0.1 加 0.3 分
+                sharpe_score += excess_sharpe * 3.0  # 例：3.2 → +0.9 分
+            elif sharpe <= 4.0:
+                # 3.5-4.0：每超過 0.1 加 0.5 分
+                sharpe_score += 0.6 * 3.0 + (sharpe - 3.5) * 5.0  # 例：3.8 → +3.3 分
+            else:
+                # > 4.0：每超過 0.1 加 1.0 分（大獎勵）
+                sharpe_score += 0.6 * 3.0 + 0.5 * 5.0 + (sharpe - 4.0) * 10.0  # 例：4.5 → +9.3 分
 
         # 胃納量分數（0-5）
         capacity_score = min(5.0, max(0, capacity / MIN_CAPACITY * 5.0))
