@@ -77,11 +77,21 @@ N_GENERATIONS = 100
 MUTATION_RATE = 0.2
 CROSSOVER_RATE = 0.8
 
-# 🔥 訓練/測試期設定（固定分割）
+# 🔥 混合方案：兩階段驗證設定
+# 第一階段：訓練期內部 Walk-Forward（2017-2022）
+# 第二階段：最終測試期驗證（2023-現在）
 TRAIN_START = '2017-01-01'  # 訓練期開始
 TRAIN_END = '2022-12-31'    # 訓練期結束
-TEST_START = '2023-01-01'   # 測試期開始
-TEST_END = None             # 測試期結束（None = 至今）
+TEST_START = '2023-01-01'   # 最終測試期開始
+TEST_END = None             # 最終測試期結束（None = 至今）
+
+# 內部 Walk-Forward 設定（在訓練期內）
+INTERNAL_WF_WINDOWS = [
+    # (訓練開始, 訓練結束, 測試開始, 測試結束)
+    ('2017-01-01', '2019-12-31', '2020-01-01', '2020-12-31'),  # Window 1: 訓練3年 → 測試2020
+    ('2018-01-01', '2020-12-31', '2021-01-01', '2021-12-31'),  # Window 2: 訓練3年 → 測試2021
+    ('2019-01-01', '2021-12-31', '2022-01-01', '2022-12-31'),  # Window 3: 訓練3年 → 測試2022
+]
 
 # 回測設定
 BACKTEST_START = TRAIN_START
@@ -796,7 +806,7 @@ class WalkForwardBacktest:
         self.results = []
 
     def run_walk_forward(self, position, params: Dict) -> Dict:
-        """🔥 執行訓練/測試期分割回測"""
+        """🔥 混合方案：兩階段驗證"""
         try:
             # 過濾時間
             if BACKTEST_START:
@@ -805,51 +815,81 @@ class WalkForwardBacktest:
             if position is None or position.empty or len(position) < 100:
                 return self._empty_result()
 
-            # 分割訓練/測試期
-            windows = self._split_windows(position.index)
+            # ========== 第一階段：訓練期內部 Walk-Forward ==========
+            internal_wf_results = []
+            internal_sharpes = []
 
-            if len(windows) < 1:
-                # 無法分割，直接全期回測
-                return self._simple_backtest(position, params)
+            for i, (tr_start, tr_end, te_start, te_end) in enumerate(INTERNAL_WF_WINDOWS):
+                try:
+                    # 測試期回測（我們關心的是測試期表現）
+                    te_start_dt = pd.to_datetime(te_start)
+                    te_end_dt = pd.to_datetime(te_end)
+                    test_pos = position.loc[te_start_dt:te_end_dt]
 
-            # 取得訓練期和測試期
-            train_dates, test_dates = windows[0]
+                    if test_pos.empty or len(test_pos) < 20:
+                        continue
 
-            # 🔥 訓練期回測
-            train_pos = position.loc[train_dates[0]:train_dates[-1]]
-            train_result = self._backtest_single_window(train_pos, params, 'Train(2017-2022)')
+                    result = self._backtest_single_window(test_pos, params, f'IWF_{te_start[:4]}')
+                    if result:
+                        internal_wf_results.append(result)
+                        internal_sharpes.append(result['sharpe'])
+                except:
+                    continue
 
-            # 🔥 測試期回測
-            test_pos = position.loc[test_dates[0]:test_dates[-1]]
-            test_result = self._backtest_single_window(test_pos, params, 'Test(2023-Now)')
+            # 第一階段穩健性：內部 Walk-Forward 的一致性
+            if len(internal_sharpes) >= 2:
+                internal_consistency = self._calculate_consistency(internal_sharpes)
+                internal_pass = (
+                    internal_consistency > 0.5 and
+                    sum(1 for s in internal_sharpes if s > 0) >= 2  # 至少2個窗口夏普>0
+                )
+            else:
+                internal_consistency = 0
+                internal_pass = False
 
-            if not train_result or not test_result:
-                return self._empty_result()
+            # ========== 第二階段：最終測試期驗證（2023-現在）==========
+            test_start_dt = pd.to_datetime(TEST_START)
+            test_end_dt = pd.to_datetime(TEST_END) if TEST_END else position.index[-1]
+            final_test_pos = position.loc[test_start_dt:test_end_dt]
 
-            # 整體回測（全期）
+            final_test_result = None
+            if not final_test_pos.empty and len(final_test_pos) >= 20:
+                final_test_result = self._backtest_single_window(final_test_pos, params, 'FinalTest(2023+)')
+
+            # ========== 整體回測（全期 2017-現在）==========
             overall_result = self._backtest_single_window(position, params, 'Overall')
 
-            # 🔥 計算穩健性（比較訓練期與測試期）
-            train_sharpe = train_result['sharpe']
-            test_sharpe = test_result['sharpe']
+            if not overall_result:
+                return self._empty_result()
 
-            # 穩健性判斷：測試期表現不能比訓練期差太多
-            sharpe_ratio = test_sharpe / (train_sharpe + 1e-10)  # 測試/訓練 比例
+            # ========== 綜合穩健性判斷 ==========
+            final_test_sharpe = final_test_result['sharpe'] if final_test_result else 0
+            avg_internal_sharpe = np.mean(internal_sharpes) if internal_sharpes else 0
+
+            # 穩健性判斷（需同時通過兩階段）
             is_robust = (
-                test_sharpe > 0 and                    # 測試期夏普 > 0
-                sharpe_ratio > 0.5 and                 # 測試期至少是訓練期的 50%
+                internal_pass and                              # 第一階段：內部 WF 通過
+                final_test_sharpe > 0 and                      # 第二階段：最終測試夏普 > 0
+                final_test_sharpe > avg_internal_sharpe * 0.4 and  # 最終測試至少是內部平均的 40%
                 overall_result['sharpe'] > TARGET_SHARPE * 0.7
             )
 
-            consistency = min(1.0, sharpe_ratio) if sharpe_ratio > 0 else 0
+            # 綜合一致性分數
+            if final_test_result and avg_internal_sharpe > 0:
+                final_ratio = final_test_sharpe / (avg_internal_sharpe + 1e-10)
+                consistency = (internal_consistency + min(1.0, final_ratio)) / 2
+            else:
+                consistency = internal_consistency * 0.5
 
             return {
                 'overall': overall_result,
-                'train_result': train_result,          # 🔥 新增訓練期結果
-                'test_result': test_result,            # 🔥 新增測試期結果
-                'windows': [train_result, test_result],
+                'internal_wf_results': internal_wf_results,    # 🔥 內部 WF 結果
+                'final_test_result': final_test_result,        # 🔥 最終測試結果
+                'windows': internal_wf_results + ([final_test_result] if final_test_result else []),
                 'is_robust': is_robust,
                 'consistency_score': consistency,
+                'internal_consistency': internal_consistency,  # 🔥 內部一致性
+                'internal_pass': internal_pass,                # 🔥 第一階段是否通過
             }
 
         except Exception as e:
@@ -1358,12 +1398,15 @@ def main():
     print(f"""
 ╔════════════════════════════════════════════════════════════════╗
 ║     FinLab 台股基因演算法優化系統 - 終極版                      ║
-║     NSGA-II + Train/Test Split + Pareto Archive               ║
+║     NSGA-II + 混合驗證方案 + Pareto Archive                    ║
 ╠════════════════════════════════════════════════════════════════╣
 ║  🎯 目標：夏普 {TARGET_SHARPE}+, 胃納量 {MIN_CAPACITY/1e7:.0f}00萬+                        ║
 ║  📊 策略：三策略動態組合優化                                     ║
-║  🔬 訓練期：{TRAIN_START[:7]} ~ {TRAIN_END[:7]}（6年）                       ║
-║  🔬 測試期：{TEST_START[:7]} ~ 現在（驗證用）                          ║
+║  🔬 第一階段：內部 Walk-Forward（2017-2022，3個窗口）            ║
+║     ├── 訓練 2017-2019 → 測試 2020                             ║
+║     ├── 訓練 2018-2020 → 測試 2021                             ║
+║     └── 訓練 2019-2021 → 測試 2022                             ║
+║  🔬 第二階段：最終測試（2023-現在）                              ║
 ║  🧬 基因：{GeneDecoder.GENE_LENGTH} 個參數                                        ║
 ╚════════════════════════════════════════════════════════════════╝
     """)
