@@ -167,14 +167,14 @@ INTERNAL_WF_WINDOWS = [
 ]
 
 # 🔥 混合驗證啟用開關
-HYBRID_VALIDATION = True  # 設為 False 可關閉混合驗證，使用原本的純夏普
+HYBRID_VALIDATION = False  # 🔥 關閉混合驗證，直攻 10 年夏普 4.2！
 
 # 過擬合警告閾值
 OVERFIT_SHARPE_RATIO = 0.6   # 測試期夏普 / 訓練期夏普 < 0.6 則警告
 OVERFIT_RETURN_RATIO = 0.5   # 測試期報酬 / 訓練期報酬 < 0.5 則警告
 
 print(f"{'='*80}")
-print(f"🚀 六組合快快龍 v12.9 (混合驗證版) - Window {WINDOW_ID}")
+print(f"🚀 六組合快快龍 v12.9 (純夏普直攻版) - Window {WINDOW_ID}")
 print(f"   🎯 目標：夏普 >= {TARGET_SHARPE}, 胃納量 >= {MIN_CAPACITY/1e4:.0f}萬")
 print(f"   📉 最大回檔限制：{MAX_DRAWDOWN*100:.0f}%")
 print(f"   🔄 視窗交互：每 {CROSS_WINDOW_INTERVAL} 代交換 Top {CROSS_WINDOW_TOP_N} 基因")
