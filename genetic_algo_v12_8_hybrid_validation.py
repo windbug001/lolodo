@@ -27,7 +27,13 @@
 ✅ 原本錯誤：舊版混合適應度值被當作夏普值存儲
 ✅ 現在：使用正確的訓練期純夏普值排序
 
-版本：v12.8 Pure-Sharpe-Fixed (2026-01-08)
+【v12.9 新增 - 市場狀態動態調整】🔥
+✅ 市場狀態判斷函數（BULL/BEAR/RANGE）
+✅ 動態持股比例（熊市20%、震盪60%、牛市100%）
+✅ 動態停損機制（熊市12%、震盪20%、牛市30%）
+✅ 關鍵：2020年V型反轉不停損、2022年熊市減倉
+
+版本：v12.9 Market-State-Dynamic (2026-01-17)
 ================================================================================
 """
 
@@ -133,6 +139,23 @@ BULL_MARKET_STOCKS = 10      # 多頭市場持股數
 BEAR_MARKET_STOCKS = 5       # 空頭市場持股數
 MARKET_THRESHOLD = 0.5       # 市場判斷閾值（>50% 股票在均線上=多頭）
 
+# 🔥 動態持股比例設定（關鍵！2020不停損、2022減倉）
+DYNAMIC_POSITION_RATIO = True  # 啟用動態持股比例
+BULL_POSITION_RATIO = 1.0      # 牛市：100% 滿持
+RANGE_POSITION_RATIO = 0.6     # 震盪：60% 持股
+BEAR_POSITION_RATIO = 0.2      # 熊市：20% 持股（關鍵！避開2022）
+
+# 🔥 動態停損設定
+DYNAMIC_STOP_LOSS = True       # 啟用動態停損
+BULL_STOP_LOSS = 0.30          # 牛市：放寬停損 30%（避免2020被洗出）
+RANGE_STOP_LOSS = 0.20         # 震盪：正常停損 20%
+BEAR_STOP_LOSS = 0.12          # 熊市：嚴格停損 12%
+
+# 🔥 市場狀態判斷參數
+MARKET_MA_SHORT = 60           # 短期均線
+MARKET_MA_LONG = 120           # 長期均線
+MARKET_TREND_THRESHOLD = 0.02  # 趨勢判斷閾值（2%）
+
 # GA 演化參數
 POPULATION_SIZE = 100        # 🔥 增加族群到 100
 N_GENERATIONS = 300          # 🔥 增加至 300 代
@@ -174,7 +197,7 @@ OVERFIT_SHARPE_RATIO = 0.6   # 測試期夏普 / 訓練期夏普 < 0.6 則警告
 OVERFIT_RETURN_RATIO = 0.5   # 測試期報酬 / 訓練期報酬 < 0.5 則警告
 
 print(f"{'='*80}")
-print(f"🚀 六組合快快龍 v12.9 (純夏普直攻版) - Window {WINDOW_ID}")
+print(f"🚀 六組合快快龍 v12.9 (市場狀態動態版) - Window {WINDOW_ID}")
 print(f"   🎯 目標：夏普 >= {TARGET_SHARPE}, 胃納量 >= {MIN_CAPACITY/1e4:.0f}萬")
 print(f"   📉 最大回檔限制：{MAX_DRAWDOWN*100:.0f}%")
 print(f"   🔄 視窗交互：每 {CROSS_WINDOW_INTERVAL} 代交換 Top {CROSS_WINDOW_TOP_N} 基因")
@@ -188,6 +211,10 @@ if HYBRID_VALIDATION:
 else:
     print(f"   📊 訓練期：{TRAIN_START} ~ {TRAIN_END}")
     print(f"   🔬 測試期：{TEST_START} ~ {TEST_END}")
+if DYNAMIC_POSITION_RATIO:
+    print(f"   🔥 動態持股：牛市{BULL_POSITION_RATIO*100:.0f}% / 震盪{RANGE_POSITION_RATIO*100:.0f}% / 熊市{BEAR_POSITION_RATIO*100:.0f}%")
+if DYNAMIC_STOP_LOSS:
+    print(f"   🛡️ 動態停損：牛市{BULL_STOP_LOSS*100:.0f}% / 震盪{RANGE_STOP_LOSS*100:.0f}% / 熊市{BEAR_STOP_LOSS*100:.0f}%")
 if CHECKPOINT_PATH:
     print(f"   🔥 指定起點：{CHECKPOINT_PATH}")
 print(f"{'='*80}")
@@ -1502,6 +1529,110 @@ def get_market_sentiment(close_df, ma_period=60):
     return sentiment
 
 
+# =============================================================================
+# 🔥 強化版市場狀態判斷（關鍵！決定持股比例和停損）
+# =============================================================================
+def get_market_state(close_df):
+    """
+    判斷市場狀態：BULL（牛市）、BEAR（熊市）、RANGE（震盪）
+
+    判斷邏輯：
+    1. 計算市場平均價格（所有股票的平均）
+    2. 使用 MA60, MA120 判斷趨勢
+    3. 牛市：價格 > MA60 > MA120 且趨勢向上
+    4. 熊市：價格 < MA60 < MA120 且趨勢向下
+    5. 其他：震盪
+
+    Returns:
+        Series: 每日市場狀態 ('BULL', 'BEAR', 'RANGE')
+    """
+    try:
+        # 計算市場平均價格（所有股票的等權平均）
+        market_avg = close_df.mean(axis=1)
+
+        # 計算均線
+        ma_short = market_avg.rolling(MARKET_MA_SHORT).mean()
+        ma_long = market_avg.rolling(MARKET_MA_LONG).mean()
+
+        # 計算趨勢（MA60 的變化率）
+        ma_trend = ma_short.pct_change(20)  # 20日變化率
+
+        # 判斷市場狀態
+        market_state = pd.Series(index=close_df.index, dtype=str)
+
+        # 牛市條件：價格 > MA60 > MA120 且 MA60 趨勢向上
+        bull_cond = (market_avg > ma_short) & (ma_short > ma_long) & (ma_trend > MARKET_TREND_THRESHOLD)
+
+        # 熊市條件：價格 < MA60 < MA120 且 MA60 趨勢向下
+        bear_cond = (market_avg < ma_short) & (ma_short < ma_long) & (ma_trend < -MARKET_TREND_THRESHOLD)
+
+        market_state[bull_cond] = 'BULL'
+        market_state[bear_cond] = 'BEAR'
+        market_state[~bull_cond & ~bear_cond] = 'RANGE'
+
+        # 填充 NaN（前期沒有均線數據）
+        market_state = market_state.fillna('RANGE')
+
+        return market_state
+
+    except Exception as e:
+        print(f"   ⚠️ 市場狀態判斷錯誤: {e}")
+        # 返回全部為 RANGE 的 Series
+        return pd.Series('RANGE', index=close_df.index)
+
+
+def get_position_ratio_by_state(market_state):
+    """
+    根據市場狀態返回持股比例
+
+    Args:
+        market_state: Series，每日市場狀態
+
+    Returns:
+        Series: 每日持股比例 (0~1)
+    """
+    if not DYNAMIC_POSITION_RATIO:
+        return pd.Series(1.0, index=market_state.index)
+
+    ratio = pd.Series(index=market_state.index, dtype=float)
+    ratio[market_state == 'BULL'] = BULL_POSITION_RATIO
+    ratio[market_state == 'BEAR'] = BEAR_POSITION_RATIO
+    ratio[market_state == 'RANGE'] = RANGE_POSITION_RATIO
+
+    return ratio.fillna(RANGE_POSITION_RATIO)
+
+
+def get_stop_loss_by_state(market_state_series):
+    """
+    根據市場狀態返回建議停損比例
+    注意：這返回的是整體趨勢的平均停損，用於回測參數
+
+    Args:
+        market_state_series: Series，每日市場狀態
+
+    Returns:
+        float: 建議停損比例
+    """
+    if not DYNAMIC_STOP_LOSS:
+        return 0.25  # 預設停損
+
+    # 計算各狀態佔比
+    state_counts = market_state_series.value_counts(normalize=True)
+
+    bull_ratio = state_counts.get('BULL', 0)
+    bear_ratio = state_counts.get('BEAR', 0)
+    range_ratio = state_counts.get('RANGE', 0)
+
+    # 加權平均停損
+    avg_stop_loss = (
+        bull_ratio * BULL_STOP_LOSS +
+        bear_ratio * BEAR_STOP_LOSS +
+        range_ratio * RANGE_STOP_LOSS
+    )
+
+    return avg_stop_loss
+
+
 def get_adaptive_top_n(close_df, base_top_n, sentiment=None):
     """
     根據市場情緒動態調整持股數量
@@ -1960,6 +2091,32 @@ def combined_strategy(gene, apply_normalization=True, start_date=None, end_date=
         if end_date:
             combined = combined[combined.index <= pd.Timestamp(end_date)]
 
+        # =================================================================
+        # 🔥 動態持股比例（關鍵！2020不停損、2022減倉）
+        # =================================================================
+        if DYNAMIC_POSITION_RATIO and not combined.empty:
+            try:
+                # 獲取市場狀態
+                market_state = get_market_state(close)
+
+                # 對齊到 combined 的 index
+                market_state_aligned = market_state.reindex(combined.index, method='ffill')
+
+                # 獲取每日持股比例
+                position_ratio = get_position_ratio_by_state(market_state_aligned)
+
+                # 🔥 關鍵：根據市場狀態調整持股比例
+                # 熊市時只持 20%，牛市 100%
+                for col in combined.columns:
+                    combined[col] = combined[col] * position_ratio
+
+                # 🔥 計算動態停損並存入 overall（供回測使用）
+                dynamic_stop_loss = get_stop_loss_by_state(market_state_aligned)
+                overall['dynamic_stop_loss'] = dynamic_stop_loss
+
+            except Exception as e:
+                pass  # 如果出錯，繼續使用原始 combined
+
         if apply_normalization and not combined.empty:
             combined = normalize_weights(combined)
 
@@ -1984,11 +2141,25 @@ def run_backtest(gene, upload=False, name="Strategy"):
         # 🔥 應用 3% 持股約束
         position = position_weight_mgr.normalize_position(position)
 
+        # 🔥 動態停損：使用市場狀態計算的代表性停損值
+        # FinLab sim() 只接受單一數值，所以取動態停損的中位數
+        if DYNAMIC_STOP_LOSS and 'dynamic_stop_loss' in params:
+            try:
+                dynamic_sl = params['dynamic_stop_loss']
+                if isinstance(dynamic_sl, pd.Series) and len(dynamic_sl) > 0:
+                    stop_loss_value = dynamic_sl.median()  # 使用中位數
+                else:
+                    stop_loss_value = params.get('stop_loss', 0.25)
+            except:
+                stop_loss_value = params.get('stop_loss', 0.25)
+        else:
+            stop_loss_value = params.get('stop_loss', 0.25)
+
         # 🔥 修正：不使用 resample，讓 position 的月營收稀疏 index 自然換股
         # 使用 params 中的 stop_loss/trail_stop/take_profit (參考小小龍預設值)
         report = sim(
             position=position,
-            stop_loss=params.get('stop_loss', 0.25),
+            stop_loss=stop_loss_value,
             trail_stop=params.get('trail_stop', 0.35),
             fee_ratio=FEE_RATIO,
             tax_ratio=TAX_RATIO,
@@ -2038,10 +2209,23 @@ def run_backtest_period(gene, start_date, end_date, name="Strategy"):
         # 🔥 應用 3% 持股約束
         position = position_weight_mgr.normalize_position(position)
 
+        # 🔥 動態停損：使用市場狀態計算的代表性停損值
+        if DYNAMIC_STOP_LOSS and 'dynamic_stop_loss' in params:
+            try:
+                dynamic_sl = params['dynamic_stop_loss']
+                if isinstance(dynamic_sl, pd.Series) and len(dynamic_sl) > 0:
+                    stop_loss_value = dynamic_sl.median()
+                else:
+                    stop_loss_value = params.get('stop_loss', 0.25)
+            except:
+                stop_loss_value = params.get('stop_loss', 0.25)
+        else:
+            stop_loss_value = params.get('stop_loss', 0.25)
+
         # 🔥 修正：不使用 resample，讓 position 的月營收稀疏 index 自然換股 (參考小小龍預設值)
         report = sim(
             position=position,
-            stop_loss=params.get('stop_loss', 0.25),
+            stop_loss=stop_loss_value,
             trail_stop=params.get('trail_stop', 0.35),
             fee_ratio=FEE_RATIO,
             tax_ratio=TAX_RATIO,
@@ -2124,10 +2308,23 @@ def run_detailed_oos_test(gene, gen):
         # 🔥 應用 3% 持股約束
         train_position = position_weight_mgr.normalize_position(train_position)
 
+        # 🔥 動態停損：使用市場狀態計算的代表性停損值
+        if DYNAMIC_STOP_LOSS and 'dynamic_stop_loss' in params:
+            try:
+                dynamic_sl = params['dynamic_stop_loss']
+                if isinstance(dynamic_sl, pd.Series) and len(dynamic_sl) > 0:
+                    train_stop_loss = dynamic_sl.median()
+                else:
+                    train_stop_loss = params.get('stop_loss', 0.25)
+            except:
+                train_stop_loss = params.get('stop_loss', 0.25)
+        else:
+            train_stop_loss = params.get('stop_loss', 0.25)
+
         # 🔥 修正：不使用 resample，讓 position 的月營收稀疏 index 自然換股 (參考小小龍預設值)
         train_report = sim(
             position=train_position,
-            stop_loss=params.get('stop_loss', 0.25),
+            stop_loss=train_stop_loss,
             trail_stop=params.get('trail_stop', 0.35),
             fee_ratio=FEE_RATIO,
             tax_ratio=TAX_RATIO,
@@ -2145,12 +2342,25 @@ def run_detailed_oos_test(gene, gen):
         train_sharpe = train_metrics['ratio'].get('sharpeRatio', 0) or 0
 
         # === 測試期回測（詳細顯示） ===
-        test_position, params = combined_strategy(gene, start_date=TEST_START, end_date=TEST_END)
+        test_position, test_params = combined_strategy(gene, start_date=TEST_START, end_date=TEST_END)
         if test_position.empty or test_position.sum().sum() == 0:
             return None
 
         # 🔥 應用 3% 持股約束
         test_position = position_weight_mgr.normalize_position(test_position)
+
+        # 🔥 動態停損：使用市場狀態計算的代表性停損值
+        if DYNAMIC_STOP_LOSS and 'dynamic_stop_loss' in test_params:
+            try:
+                dynamic_sl = test_params['dynamic_stop_loss']
+                if isinstance(dynamic_sl, pd.Series) and len(dynamic_sl) > 0:
+                    test_stop_loss = dynamic_sl.median()
+                else:
+                    test_stop_loss = test_params.get('stop_loss', 0.25)
+            except:
+                test_stop_loss = test_params.get('stop_loss', 0.25)
+        else:
+            test_stop_loss = test_params.get('stop_loss', 0.25)
 
         print(f"\n{'='*60}")
         print(f"📊 第 {gen} 代 - 測試期詳細回測 ({TEST_START[:4]}~{TEST_END[:4]})")
@@ -2159,13 +2369,13 @@ def run_detailed_oos_test(gene, gen):
         # 🔥 修正：不使用 resample，讓 position 的月營收稀疏 index 自然換股 (參考小小龍預設值)
         test_report = sim(
             position=test_position,
-            stop_loss=params.get('stop_loss', 0.25),
-            trail_stop=params.get('trail_stop', 0.35),
+            stop_loss=test_stop_loss,
+            trail_stop=test_params.get('trail_stop', 0.35),
             fee_ratio=FEE_RATIO,
             tax_ratio=TAX_RATIO,
-            trade_at_price=params.get('trade_at_price', 'high_low_avg'),
-            position_limit=params.get('position_limit', 0.35),
-            take_profit=params.get('take_profit', 0.70),
+            trade_at_price=test_params.get('trade_at_price', 'high_low_avg'),
+            position_limit=test_params.get('position_limit', 0.35),
+            take_profit=test_params.get('take_profit', 0.70),
             stop_trading_next_period=False,
             upload=False,
             name=f"快快龍_W{WINDOW_ID}_Gen{gen}_測試期"
@@ -2252,9 +2462,22 @@ def evaluate_fitness(gene):
 
                 position = position_weight_mgr.normalize_position(position)
 
+                # 🔥 動態停損
+                if DYNAMIC_STOP_LOSS and 'dynamic_stop_loss' in params:
+                    try:
+                        dynamic_sl = params['dynamic_stop_loss']
+                        if isinstance(dynamic_sl, pd.Series) and len(dynamic_sl) > 0:
+                            iwf_stop_loss = dynamic_sl.median()
+                        else:
+                            iwf_stop_loss = params.get('stop_loss', 0.25)
+                    except:
+                        iwf_stop_loss = params.get('stop_loss', 0.25)
+                else:
+                    iwf_stop_loss = params.get('stop_loss', 0.25)
+
                 report = sim(
                     position=position,
-                    stop_loss=params.get('stop_loss', 0.25),
+                    stop_loss=iwf_stop_loss,
                     trail_stop=params.get('trail_stop', 0.35),
                     fee_ratio=FEE_RATIO,
                     tax_ratio=TAX_RATIO,
@@ -2288,21 +2511,34 @@ def evaluate_fitness(gene):
 
         # ========== 第二階段：最終測試期驗證 ==========
         try:
-            final_position, params = combined_strategy(gene, start_date=TEST_START, end_date=TEST_END)
+            final_position, final_params = combined_strategy(gene, start_date=TEST_START, end_date=TEST_END)
             if final_position.empty:
                 return (internal_avg * 0.5,)  # 只有內部驗證分數
 
             final_position = position_weight_mgr.normalize_position(final_position)
 
+            # 🔥 動態停損
+            if DYNAMIC_STOP_LOSS and 'dynamic_stop_loss' in final_params:
+                try:
+                    dynamic_sl = final_params['dynamic_stop_loss']
+                    if isinstance(dynamic_sl, pd.Series) and len(dynamic_sl) > 0:
+                        final_stop_loss = dynamic_sl.median()
+                    else:
+                        final_stop_loss = final_params.get('stop_loss', 0.25)
+                except:
+                    final_stop_loss = final_params.get('stop_loss', 0.25)
+            else:
+                final_stop_loss = final_params.get('stop_loss', 0.25)
+
             final_report = sim(
                 position=final_position,
-                stop_loss=params.get('stop_loss', 0.25),
-                trail_stop=params.get('trail_stop', 0.35),
+                stop_loss=final_stop_loss,
+                trail_stop=final_params.get('trail_stop', 0.35),
                 fee_ratio=FEE_RATIO,
                 tax_ratio=TAX_RATIO,
-                trade_at_price=params.get('trade_at_price', 'high_low_avg'),
-                position_limit=params.get('position_limit', 0.35),
-                take_profit=params.get('take_profit', 0.70),
+                trade_at_price=final_params.get('trade_at_price', 'high_low_avg'),
+                position_limit=final_params.get('position_limit', 0.35),
+                take_profit=final_params.get('take_profit', 0.70),
                 stop_trading_next_period=False,
                 upload=False,
                 name="FinalTest"
@@ -2344,9 +2580,22 @@ def _evaluate_pure_sharpe(gene):
 
         position = position_weight_mgr.normalize_position(position)
 
+        # 🔥 動態停損
+        if DYNAMIC_STOP_LOSS and 'dynamic_stop_loss' in params:
+            try:
+                dynamic_sl = params['dynamic_stop_loss']
+                if isinstance(dynamic_sl, pd.Series) and len(dynamic_sl) > 0:
+                    stop_loss_value = dynamic_sl.median()
+                else:
+                    stop_loss_value = params.get('stop_loss', 0.25)
+            except:
+                stop_loss_value = params.get('stop_loss', 0.25)
+        else:
+            stop_loss_value = params.get('stop_loss', 0.25)
+
         report = sim(
             position=position,
-            stop_loss=params.get('stop_loss', 0.25),
+            stop_loss=stop_loss_value,
             trail_stop=params.get('trail_stop', 0.35),
             fee_ratio=FEE_RATIO,
             tax_ratio=TAX_RATIO,
