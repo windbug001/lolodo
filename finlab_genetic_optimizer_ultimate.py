@@ -77,14 +77,15 @@ N_GENERATIONS = 100
 MUTATION_RATE = 0.2
 CROSSOVER_RATE = 0.8
 
-# Walk-Forward 設定
-WALK_FORWARD_WINDOWS = 3  # 3 個時間窗口
-TRAIN_MONTHS = 24         # 訓練期 24 個月
-TEST_MONTHS = 6           # 測試期 6 個月
+# 🔥 訓練/測試期設定（固定分割）
+TRAIN_START = '2017-01-01'  # 訓練期開始
+TRAIN_END = '2022-12-31'    # 訓練期結束
+TEST_START = '2023-01-01'   # 測試期開始
+TEST_END = None             # 測試期結束（None = 至今）
 
 # 回測設定
-BACKTEST_START = '2017-01-01'
-BACKTEST_END = None
+BACKTEST_START = TRAIN_START
+BACKTEST_END = TEST_END
 
 print(f"=" * 80)
 print(f"🚀 FinLab 台股基因演算法優化系統 v1.0 - 視窗 {WINDOW_ID}")
@@ -795,7 +796,7 @@ class WalkForwardBacktest:
         self.results = []
 
     def run_walk_forward(self, position, params: Dict) -> Dict:
-        """執行 Walk-Forward 分析"""
+        """🔥 執行訓練/測試期分割回測"""
         try:
             # 過濾時間
             if BACKTEST_START:
@@ -804,44 +805,49 @@ class WalkForwardBacktest:
             if position is None or position.empty or len(position) < 100:
                 return self._empty_result()
 
-            # 分割時間窗口
+            # 分割訓練/測試期
             windows = self._split_windows(position.index)
 
-            if len(windows) < 2:
-                # 窗口不足，直接全期回測
+            if len(windows) < 1:
+                # 無法分割，直接全期回測
                 return self._simple_backtest(position, params)
 
-            # 各窗口回測
-            window_results = []
-            for i, (train_dates, test_dates) in enumerate(windows):
-                # 只用測試期
-                test_pos = position.loc[test_dates[0]:test_dates[-1]]
+            # 取得訓練期和測試期
+            train_dates, test_dates = windows[0]
 
-                if test_pos.empty:
-                    continue
+            # 🔥 訓練期回測
+            train_pos = position.loc[train_dates[0]:train_dates[-1]]
+            train_result = self._backtest_single_window(train_pos, params, 'Train(2017-2022)')
 
-                result = self._backtest_single_window(test_pos, params, f'Window{i}')
-                if result:
-                    window_results.append(result)
+            # 🔥 測試期回測
+            test_pos = position.loc[test_dates[0]:test_dates[-1]]
+            test_result = self._backtest_single_window(test_pos, params, 'Test(2023-Now)')
 
-            if not window_results:
+            if not train_result or not test_result:
                 return self._empty_result()
 
-            # 整體回測
+            # 整體回測（全期）
             overall_result = self._backtest_single_window(position, params, 'Overall')
 
-            # 計算穩健性
-            sharpes = [r['sharpe'] for r in window_results]
-            consistency = self._calculate_consistency(sharpes)
+            # 🔥 計算穩健性（比較訓練期與測試期）
+            train_sharpe = train_result['sharpe']
+            test_sharpe = test_result['sharpe']
+
+            # 穩健性判斷：測試期表現不能比訓練期差太多
+            sharpe_ratio = test_sharpe / (train_sharpe + 1e-10)  # 測試/訓練 比例
             is_robust = (
-                consistency > 0.6 and
-                all(s > 0 for s in sharpes) and
+                test_sharpe > 0 and                    # 測試期夏普 > 0
+                sharpe_ratio > 0.5 and                 # 測試期至少是訓練期的 50%
                 overall_result['sharpe'] > TARGET_SHARPE * 0.7
             )
 
+            consistency = min(1.0, sharpe_ratio) if sharpe_ratio > 0 else 0
+
             return {
                 'overall': overall_result,
-                'windows': window_results,
+                'train_result': train_result,          # 🔥 新增訓練期結果
+                'test_result': test_result,            # 🔥 新增測試期結果
+                'windows': [train_result, test_result],
                 'is_robust': is_robust,
                 'consistency_score': consistency,
             }
@@ -853,30 +859,24 @@ class WalkForwardBacktest:
             return self._empty_result()
 
     def _split_windows(self, dates) -> List[Tuple]:
-        """分割時間窗口"""
+        """🔥 固定訓練/測試期分割"""
         windows = []
 
-        start_date = dates[0]
-        end_date = dates[-1]
+        # 轉換為 datetime
+        train_start = pd.to_datetime(TRAIN_START)
+        train_end = pd.to_datetime(TRAIN_END)
+        test_start = pd.to_datetime(TEST_START)
+        test_end = pd.to_datetime(TEST_END) if TEST_END else dates[-1]
 
-        current_date = start_date
-        while current_date < end_date:
-            train_end = current_date + pd.DateOffset(months=TRAIN_MONTHS)
-            test_end = train_end + pd.DateOffset(months=TEST_MONTHS)
+        # 訓練期資料
+        train_dates = dates[(dates >= train_start) & (dates <= train_end)]
+        # 測試期資料
+        test_dates = dates[(dates >= test_start) & (dates <= test_end)]
 
-            if test_end > end_date:
-                test_end = end_date
-
-            train_dates = dates[(dates >= current_date) & (dates < train_end)]
-            test_dates = dates[(dates >= train_end) & (dates < test_end)]
-
-            if len(train_dates) > 20 and len(test_dates) > 10:
-                windows.append((train_dates, test_dates))
-
-            current_date = train_end
-
-            if len(windows) >= WALK_FORWARD_WINDOWS:
-                break
+        if len(train_dates) > 20 and len(test_dates) > 10:
+            windows.append((train_dates, test_dates))
+            print(f"   📅 訓練期: {train_start.strftime('%Y/%m')} ~ {train_end.strftime('%Y/%m')} ({len(train_dates)} 天)")
+            print(f"   📅 測試期: {test_start.strftime('%Y/%m')} ~ {test_end.strftime('%Y/%m')} ({len(test_dates)} 天)")
 
         return windows
 
@@ -1358,11 +1358,12 @@ def main():
     print(f"""
 ╔════════════════════════════════════════════════════════════════╗
 ║     FinLab 台股基因演算法優化系統 - 終極版                      ║
-║     NSGA-II + Walk-Forward + Pareto Archive                   ║
+║     NSGA-II + Train/Test Split + Pareto Archive               ║
 ╠════════════════════════════════════════════════════════════════╣
 ║  🎯 目標：夏普 {TARGET_SHARPE}+, 胃納量 {MIN_CAPACITY/1e7:.0f}00萬+                        ║
 ║  📊 策略：三策略動態組合優化                                     ║
-║  🔬 驗證：Walk-Forward ({WALK_FORWARD_WINDOWS} 窗口)                             ║
+║  🔬 訓練期：{TRAIN_START[:7]} ~ {TRAIN_END[:7]}（6年）                       ║
+║  🔬 測試期：{TEST_START[:7]} ~ 現在（驗證用）                          ║
 ║  🧬 基因：{GeneDecoder.GENE_LENGTH} 個參數                                        ║
 ╚════════════════════════════════════════════════════════════════╝
     """)
