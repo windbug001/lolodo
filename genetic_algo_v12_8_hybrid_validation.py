@@ -140,26 +140,30 @@ BEAR_MARKET_STOCKS = 5       # 空頭市場持股數
 MARKET_THRESHOLD = 0.5       # 市場判斷閾值（>50% 股票在均線上=多頭）
 
 # 🔥 動態持股比例設定（關鍵！2020不停損、2022減倉）
+# 🎛️ 可通過環境變數覆蓋：BEAR_POSITION_RATIO, RANGE_POSITION_RATIO 等
 DYNAMIC_POSITION_RATIO = True  # 啟用動態持股比例
-BULL_POSITION_RATIO = 1.0      # 牛市：100% 滿持
-RANGE_POSITION_RATIO = 0.6     # 震盪：60% 持股
-BEAR_POSITION_RATIO = 0.2      # 熊市：20% 持股（關鍵！避開2022）
+BULL_POSITION_RATIO = float(os.environ.get('BULL_POSITION_RATIO', '1.0'))      # 牛市：100% 滿持
+RANGE_POSITION_RATIO = float(os.environ.get('RANGE_POSITION_RATIO', '0.6'))    # 震盪：60% 持股
+BEAR_POSITION_RATIO = float(os.environ.get('BEAR_POSITION_RATIO', '0.1'))      # 熊市：10% 持股（關鍵！避開2022）
 
 # 🔥 動態停損設定
+# 🎛️ 可通過環境變數覆蓋：BULL_STOP_LOSS, BEAR_STOP_LOSS 等
 DYNAMIC_STOP_LOSS = True       # 啟用動態停損
-BULL_STOP_LOSS = 0.30          # 牛市：放寬停損 30%（避免2020被洗出）
-RANGE_STOP_LOSS = 0.20         # 震盪：正常停損 20%
-BEAR_STOP_LOSS = 0.12          # 熊市：嚴格停損 12%
+BULL_STOP_LOSS = float(os.environ.get('BULL_STOP_LOSS', '0.30'))    # 牛市：放寬停損 30%（避免2020被洗出）
+RANGE_STOP_LOSS = float(os.environ.get('RANGE_STOP_LOSS', '0.20'))  # 震盪：正常停損 20%
+BEAR_STOP_LOSS = float(os.environ.get('BEAR_STOP_LOSS', '0.10'))    # 熊市：嚴格停損 10%
 
 # 🔥 市場狀態判斷參數
-MARKET_MA_SHORT = 60           # 短期均線
-MARKET_MA_LONG = 120           # 長期均線
-MARKET_TREND_THRESHOLD = 0.02  # 趨勢判斷閾值（2%）
+# 🎛️ 可通過環境變數覆蓋：MARKET_MA_SHORT, MARKET_MA_LONG 等
+MARKET_MA_SHORT = int(os.environ.get('MARKET_MA_SHORT', '40'))      # 短期均線（更靈敏）
+MARKET_MA_LONG = int(os.environ.get('MARKET_MA_LONG', '120'))       # 長期均線
+MARKET_TREND_THRESHOLD = float(os.environ.get('MARKET_TREND_THRESHOLD', '0.02'))  # 趨勢判斷閾值（2%）
 
 # GA 演化參數
-POPULATION_SIZE = 100        # 🔥 增加族群到 100
+# 🎛️ 可通過環境變數覆蓋：POPULATION_SIZE, MUTATION_RATE 等
+POPULATION_SIZE = int(os.environ.get('POPULATION_SIZE', '120'))   # 🔥 族群大小
 N_GENERATIONS = 300          # 🔥 增加至 300 代
-MUTATION_RATE = 0.15         # 降低突變率以穩定
+MUTATION_RATE = float(os.environ.get('MUTATION_RATE', '0.12'))    # 突變率
 CROSSOVER_RATE = 0.8
 ELITE_RATIO = 0.1
 
