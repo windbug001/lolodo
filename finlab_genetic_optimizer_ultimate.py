@@ -1448,7 +1448,7 @@ def main():
                     take_profit=hist_params.get('take_profit', 0.75),
                     stop_trading_next_period=False,
                     upload=True,  # 🔥 上傳到 FinLab
-                    name=f'小龍_視窗{WINDOW_ID}_歷史最佳'
+                    name=f'Dragon_W{WINDOW_ID}_HistBest'
                 )
 
                 metrics = report.get_metrics()
@@ -1517,7 +1517,7 @@ def main():
                 take_profit=best_params['take_profit'],
                 stop_trading_next_period=False,
                 upload=False,
-                name=f'小龍_視窗{WINDOW_ID}_最終優化'
+                name=f'Dragon_W{WINDOW_ID}_FinalBest'
             )
 
             report.display()
