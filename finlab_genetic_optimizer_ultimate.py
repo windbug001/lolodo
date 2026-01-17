@@ -758,11 +758,22 @@ class GeneDecoder:
         params['rpt_top_n'] = int(genes[24] * 10 + 8)  # 8-18
 
         # === 策略權重（3個）===
+        # 🔥 每個策略權重限制在 10%-80% 之間
+        MIN_WEIGHT = 0.10  # 最低 10%
+        MAX_WEIGHT = 0.80  # 最高 80%
+
         raw_weights = genes[25:28]
         total = sum(raw_weights) + 1e-10
-        params['weight_lv'] = raw_weights[0] / total
-        params['weight_si'] = raw_weights[1] / total
-        params['weight_rpt'] = raw_weights[2] / total
+        weights = [w / total for w in raw_weights]
+
+        # 限制每個權重在 MIN_WEIGHT 到 MAX_WEIGHT 之間
+        weights = [max(MIN_WEIGHT, min(MAX_WEIGHT, w)) for w in weights]
+
+        # 重新正規化使總和為 100%
+        total_clamped = sum(weights)
+        params['weight_lv'] = weights[0] / total_clamped
+        params['weight_si'] = weights[1] / total_clamped
+        params['weight_rpt'] = weights[2] / total_clamped
 
         # === 回測參數（4個）===
         params['stop_loss'] = genes[28] * 0.2 + 0.15  # 15%-35%
