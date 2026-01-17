@@ -985,6 +985,7 @@ def evaluate_fitness(individual: List[float]) -> Tuple[float, float, float, floa
         sharpe = overall['sharpe']
         capacity = overall['capacity']
         annual_return = overall['annual_return']
+        max_drawdown = overall['max_drawdown']  # 🔥 獲取 MDD
 
         # 夏普值分數（0-5）
         sharpe_score = min(5.0, max(0, sharpe / TARGET_SHARPE * 5.0))
@@ -1001,6 +1002,23 @@ def evaluate_fitness(individual: List[float]) -> Tuple[float, float, float, floa
         else:
             consistency = wf_result['consistency_score']
             robustness_penalty = -(1 - consistency) * 3
+
+        # 🔥 MDD 處罰（大於 20% 加大處罰力度）
+        mdd_penalty = 0.0
+        if max_drawdown > 0.20:  # MDD > 20%
+            excess_mdd = max_drawdown - 0.20  # 超過 20% 的部分
+            if max_drawdown <= 0.30:
+                # 20%-30%：中度處罰（每超過 1% 扣 0.5 分）
+                mdd_penalty = -excess_mdd * 50  # 例：25% MDD → -2.5 分
+            elif max_drawdown <= 0.40:
+                # 30%-40%：重度處罰（每超過 1% 扣 1 分）
+                mdd_penalty = -0.10 * 50 - (max_drawdown - 0.30) * 100  # 例：35% MDD → -10 分
+            else:
+                # > 40%：極重處罰（每超過 1% 扣 2 分）
+                mdd_penalty = -0.10 * 50 - 0.10 * 100 - (max_drawdown - 0.40) * 200
+
+        # 將 MDD 處罰加入穩健性懲罰
+        robustness_penalty += mdd_penalty
 
         return (sharpe_score, capacity_score, return_score, robustness_penalty)
 
