@@ -2,8 +2,8 @@
 # -*- coding: utf-8 -*-
 """
 ================================================================================
-🧬 FinLab 台股基因演算法優化系統 - 終極版
-FinLab Taiwan Stock Genetic Algorithm Optimizer - Ultimate Edition
+🧬 FinLab 台股基因演算法優化系統 - 終極版 v2.0
+FinLab Taiwan Stock Genetic Algorithm Optimizer - Ultimate Edition v2.0
 ================================================================================
 
 【核心功能】
@@ -12,6 +12,7 @@ FinLab Taiwan Stock Genetic Algorithm Optimizer - Ultimate Edition
 ✅ 歷史最佳持續進化 (Pareto Archive)
 ✅ Walk-Forward 驗證避免 overfitting
 ✅ 完全遵循 FinLab 原生 API
+✅ 🔥 每 10 代完整回測一次，即時顯示績效
 
 【目標】
 - 夏普值：>= 4.0
@@ -25,7 +26,7 @@ FinLab Taiwan Stock Genetic Algorithm Optimizer - Ultimate Edition
 3. 營收股價雙渦輪策略
 4. 動態權重優化
 
-版本：v1.0 Ultimate (2025-12-26)
+版本：v2.0 Ultimate (2025-12-27)
 環境：Google Colab Pro+ (CPU + High-RAM)
 ================================================================================
 """
@@ -62,7 +63,7 @@ pd.set_option('display.max_columns', None)
 pd.set_option('future.no_silent_downcasting', True)
 
 # === 🔥 核心設定（請修改）===
-WINDOW_ID = 1  # 🔥 視窗 ID (1-4)，多視窗執行時請修改此值
+WINDOW_ID = int(os.environ.get('WINDOW_ID', 1))  # 🔥 視窗 ID (1-4)，從環境變數讀取
 FINLAB_API_KEY = "R5XcZHGBZgEO5zz+6e1iYAe3wcFiimTUNaCMKsnZEiM42Wp49xW46MySUZT1W/Ee#vip_m"
 
 # 優化目標
@@ -77,6 +78,9 @@ N_GENERATIONS = 100
 MUTATION_RATE = 0.2
 CROSSOVER_RATE = 0.8
 
+# 🔥 完整回測間隔（每 N 代完整回測一次）
+FULL_BACKTEST_INTERVAL = 10
+
 # Walk-Forward 設定
 WALK_FORWARD_WINDOWS = 3  # 3 個時間窗口
 TRAIN_MONTHS = 24         # 訓練期 24 個月
@@ -87,8 +91,9 @@ BACKTEST_START = '2017-01-01'
 BACKTEST_END = None
 
 print(f"=" * 80)
-print(f"🚀 FinLab 台股基因演算法優化系統 v1.0 - 視窗 {WINDOW_ID}")
+print(f"🚀 FinLab 台股基因演算法優化系統 v2.0 - 視窗 {WINDOW_ID}")
 print(f"   🎯 目標：夏普 >= {TARGET_SHARPE}, 胃納量 >= {MIN_CAPACITY/1e7:.0f}00萬")
+print(f"   🔄 每 {FULL_BACKTEST_INTERVAL} 代完整回測一次")
 print(f"=" * 80)
 
 # =============================================================================
@@ -1165,19 +1170,21 @@ class ProgressLogger:
 
 
 class EvolutionEngine:
-    """演化引擎"""
+    """演化引擎（🔥 v2.0 新增每 N 代完整回測功能）"""
 
     def __init__(self, toolbox, pareto_mgr: ParetoArchiveManager):
         self.toolbox = toolbox
         self.pareto_mgr = pareto_mgr
         self.history = []
         self.logger = ProgressLogger(WINDOW_ID)  # 🔥 初始化進度日誌記錄器
+        self.full_backtest_results = []  # 🔥 儲存完整回測結果
 
     def run(self, n_generations: int = N_GENERATIONS) -> Tuple[List, List]:
         """執行演化"""
         print(f"\n{'='*70}")
         print(f"🚀 開始演化")
         print(f"   族群: {POPULATION_SIZE}, 世代: {n_generations}")
+        print(f"   🔥 每 {FULL_BACKTEST_INTERVAL} 代完整回測一次")
         print(f"{'='*70}\n")
 
         # 初始化族群
@@ -1231,6 +1238,10 @@ class EvolutionEngine:
                 print(f"   穩健性: {stats['best_robustness']:.2f}")
                 print(f"   耗時: {elapsed:.1f}s")
 
+            # 🔥🔥🔥 每 N 代完整回測一次 🔥🔥🔥
+            if (gen + 1) % FULL_BACKTEST_INTERVAL == 0:
+                self._run_full_backtest(population, gen + 1)
+
         # Pareto 前緣
         pareto_front = tools.sortNondominated(population, len(population), first_front_only=True)[0]
 
@@ -1240,7 +1251,148 @@ class EvolutionEngine:
         # 輸出結果
         self._print_pareto_front(pareto_front)
 
+        # 🔥 輸出完整回測摘要
+        self._print_full_backtest_summary()
+
         return population, pareto_front
+
+    def _run_full_backtest(self, population: List, gen: int):
+        """🔥 執行完整回測（每 N 代觸發一次）"""
+        print(f"\n{'='*70}")
+        print(f"📊 第 {gen} 代 - 完整回測")
+        print(f"{'='*70}")
+
+        # 找出當前最佳個體
+        best_ind = max(population, key=lambda x: sum(x.fitness.values))
+        best_params = gene_decoder.decode(best_ind)
+
+        try:
+            # 組合策略
+            position = strategy_engine.combine_strategies(best_params)
+
+            if position is None or position.empty:
+                print("   ⚠️ 無法生成持倉，跳過完整回測")
+                return
+
+            # 過濾時間
+            if BACKTEST_START:
+                position = position.loc[BACKTEST_START:]
+
+            # 執行完整回測
+            report = sim(
+                position=position,
+                fee_ratio=1.425 / 1000,
+                tax_ratio=3 / 1000,
+                trade_at_price="high_low_avg",
+                position_limit=best_params['position_limit'],
+                stop_loss=best_params['stop_loss'],
+                trail_stop=best_params['trail_stop'],
+                take_profit=best_params['take_profit'],
+                stop_trading_next_period=False,
+                upload=False,
+                name=f'Gen{gen}_FullBacktest'
+            )
+
+            # 獲取指標
+            metrics = report.get_metrics()
+
+            sharpe = metrics['ratio'].get('sharpeRatio', 0) or 0
+            annual_return = metrics['profitability'].get('annualReturn', 0) or 0
+            max_dd = abs(metrics['risk'].get('maxDrawdown', 0) or 0)
+            capacity = metrics['liquidity'].get('capacity', 0) or 0
+            win_rate = metrics['profitability'].get('winRate', 0) or 0
+            total_return = metrics['profitability'].get('totalReturn', 0) or 0
+
+            # 儲存結果
+            result = {
+                'generation': gen,
+                'sharpe': sharpe,
+                'annual_return': annual_return,
+                'max_drawdown': max_dd,
+                'capacity': capacity,
+                'win_rate': win_rate,
+                'total_return': total_return,
+                'params': best_params,
+                'timestamp': datetime.now().isoformat(),
+            }
+            self.full_backtest_results.append(result)
+
+            # 顯示結果
+            print(f"\n┌─────────────────────────────────────────────────────────┐")
+            print(f"│  📊 第 {gen} 代完整回測結果                              │")
+            print(f"├─────────────────────────────────────────────────────────┤")
+            print(f"│  夏普值:     {sharpe:>10.2f}  {'✅' if sharpe >= TARGET_SHARPE else '❌'} (目標 >= {TARGET_SHARPE})     │")
+            print(f"│  年化報酬:   {annual_return*100:>10.1f}%                                │")
+            print(f"│  最大回撤:   {max_dd*100:>10.1f}%  {'✅' if max_dd <= MAX_DRAWDOWN else '⚠️'} (目標 <= {MAX_DRAWDOWN*100:.0f}%)    │")
+            print(f"│  胃納量:     {capacity/1e4:>10.0f}萬 {'✅' if capacity >= MIN_CAPACITY else '❌'} (目標 >= {MIN_CAPACITY/1e4:.0f}萬)   │")
+            print(f"│  勝率:       {win_rate*100:>10.1f}%                                │")
+            print(f"│  累積報酬:   {total_return*100:>10.1f}%                                │")
+            print(f"├─────────────────────────────────────────────────────────┤")
+            print(f"│  策略權重: 低波動 {best_params['weight_lv']:.1%} | 小資族 {best_params['weight_si']:.1%} | 雙渦輪 {best_params['weight_rpt']:.1%}  │")
+            print(f"└─────────────────────────────────────────────────────────┘")
+
+            # 達標檢查
+            if sharpe >= TARGET_SHARPE and capacity >= MIN_CAPACITY:
+                print(f"\n🎉🎉🎉 恭喜！第 {gen} 代已達成目標！🎉🎉🎉")
+
+            # 保存中間結果
+            self._save_intermediate_result(result)
+
+        except Exception as e:
+            print(f"   ⚠️ 完整回測失敗: {e}")
+            import traceback
+            traceback.print_exc()
+
+        print(f"{'='*70}\n")
+
+    def _save_intermediate_result(self, result: Dict):
+        """保存中間結果到檔案"""
+        try:
+            result_file = f"{paths.output_dir}/gen{result['generation']}_backtest.json"
+
+            # 轉換 params 中的數值為可序列化格式
+            serializable_result = result.copy()
+            serializable_result['params'] = {k: float(v) if isinstance(v, (np.floating, np.integer)) else v
+                                             for k, v in result['params'].items()}
+
+            with open(result_file, 'w', encoding='utf-8') as f:
+                json.dump(serializable_result, f, indent=2, ensure_ascii=False)
+
+            print(f"   💾 結果已保存: {result_file}")
+        except Exception as e:
+            print(f"   ⚠️ 保存失敗: {e}")
+
+    def _print_full_backtest_summary(self):
+        """🔥 輸出所有完整回測的摘要"""
+        if not self.full_backtest_results:
+            return
+
+        print(f"\n{'='*80}")
+        print(f"📈 完整回測歷史摘要（每 {FULL_BACKTEST_INTERVAL} 代）")
+        print(f"{'='*80}")
+        print(f"{'世代':<8}{'夏普':<10}{'年化報酬':<12}{'最大回撤':<12}{'胃納量(萬)':<12}{'達標'}")
+        print("-" * 80)
+
+        best_result = None
+        best_score = -999
+
+        for r in self.full_backtest_results:
+            reached = "✅" if r['sharpe'] >= TARGET_SHARPE and r['capacity'] >= MIN_CAPACITY else ""
+            print(f"{r['generation']:<8}{r['sharpe']:<10.2f}{r['annual_return']*100:<12.1f}%{r['max_drawdown']*100:<12.1f}%{r['capacity']/1e4:<12.0f}{reached}")
+
+            # 計算綜合分數
+            score = r['sharpe'] + r['capacity'] / MIN_CAPACITY + r['annual_return']
+            if score > best_score:
+                best_score = score
+                best_result = r
+
+        print("-" * 80)
+
+        if best_result:
+            print(f"\n🏆 最佳結果（第 {best_result['generation']} 代）:")
+            print(f"   夏普值: {best_result['sharpe']:.2f}")
+            print(f"   年化報酬: {best_result['annual_return']*100:.1f}%")
+            print(f"   胃納量: {best_result['capacity']/1e4:.0f} 萬")
 
     def _evaluate_population(self, population: List) -> List:
         """評估族群"""
@@ -1314,15 +1466,16 @@ class EvolutionEngine:
 def main():
     """主程式入口"""
     print(f"""
-╔════════════════════════════════════════════════════════════════╗
-║     FinLab 台股基因演算法優化系統 - 終極版                      ║
-║     NSGA-II + Walk-Forward + Pareto Archive                   ║
-╠════════════════════════════════════════════════════════════════╣
-║  🎯 目標：夏普 {TARGET_SHARPE}+, 胃納量 {MIN_CAPACITY/1e7:.0f}00萬+                        ║
-║  📊 策略：三策略動態組合優化                                     ║
-║  🔬 驗證：Walk-Forward ({WALK_FORWARD_WINDOWS} 窗口)                             ║
-║  🧬 基因：{GeneDecoder.GENE_LENGTH} 個參數                                        ║
-╚════════════════════════════════════════════════════════════════╝
+╔════════════════════════════════════════════════════════════════════╗
+║     FinLab 台股基因演算法優化系統 - 終極版 v2.0                     ║
+║     NSGA-II + Walk-Forward + Pareto Archive                       ║
+╠════════════════════════════════════════════════════════════════════╣
+║  🎯 目標：夏普 {TARGET_SHARPE}+, 胃納量 {MIN_CAPACITY/1e7:.0f}00萬+                              ║
+║  📊 策略：三策略動態組合優化                                         ║
+║  🔬 驗證：Walk-Forward ({WALK_FORWARD_WINDOWS} 窗口)                                 ║
+║  🧬 基因：{GeneDecoder.GENE_LENGTH} 個參數                                            ║
+║  🔄 每 {FULL_BACKTEST_INTERVAL} 代完整回測一次                                       ║
+╚════════════════════════════════════════════════════════════════════╝
     """)
 
     # 建立演化引擎
@@ -1348,7 +1501,9 @@ def main():
 
         # 保存最佳參數
         with open(paths.best_params_file, 'w') as f:
-            json.dump(best_params, f, indent=2)
+            serializable_params = {k: float(v) if isinstance(v, (np.floating, np.integer)) else v
+                                   for k, v in best_params.items()}
+            json.dump(serializable_params, f, indent=2)
         print(f"\n✅ 最佳參數已保存: {paths.best_params_file}")
 
         # 完整回測
@@ -1367,7 +1522,7 @@ def main():
                 take_profit=best_params['take_profit'],
                 stop_trading_next_period=False,
                 upload=False,
-                name=f'FinLab_GA_Ultimate_Best'
+                name=f'FinLab_GA_Ultimate_v2_Best'
             )
 
             report.display()
