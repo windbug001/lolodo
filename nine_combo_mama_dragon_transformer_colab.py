@@ -794,21 +794,33 @@ class WalkForwardValidator:
                     valid_dates_fold.append(dates[i])
 
             if positions:
-                position_df = pd.concat(positions, axis=1).T
-                # 使用字串格式日期以匹配 FinLab 內部數據格式
-                position_df.index = pd.to_datetime(valid_dates_fold).strftime('%Y-%m-%d')
-                position_df = position_df.fillna(0)
-                all_positions.append(position_df)
+                # 取得 FinLab 原始收盤價數據（用於確保索引格式一致）
+                close = data.get('price:收盤價')
+                close_dates = pd.to_datetime(close.index)
 
-                fold_results.append({
-                    'fold': fold_idx + 1,
-                    'test_year': test_year,
-                    'n_positions': len(positions),
-                    'train_loss': trainer.history['train_loss'][-1] if trainer.history['train_loss'] else None,
-                    'val_loss': trainer.history['val_loss'][-1] if trainer.history['val_loss'] else None,
-                })
+                # 將日期對齊到 FinLab 數據的索引格式
+                aligned_positions = []
+                for pos_series, target_date in zip(positions, valid_dates_fold):
+                    date_mask = close_dates <= target_date
+                    if date_mask.any():
+                        actual_date = close.index[date_mask][-1]
+                        pos_series.name = actual_date
+                        aligned_positions.append(pos_series)
 
-                print(f"   ✅ 生成 {len(positions)} 個持倉決策")
+                if aligned_positions:
+                    position_df = pd.concat(aligned_positions, axis=1).T
+                    position_df = position_df.fillna(0)
+                    all_positions.append(position_df)
+
+                    fold_results.append({
+                        'fold': fold_idx + 1,
+                        'test_year': test_year,
+                        'n_positions': len(aligned_positions),
+                        'train_loss': trainer.history['train_loss'][-1] if trainer.history['train_loss'] else None,
+                        'val_loss': trainer.history['val_loss'][-1] if trainer.history['val_loss'] else None,
+                    })
+
+                    print(f"   ✅ 生成 {len(aligned_positions)} 個持倉決策")
 
         # 合併所有持倉
         if all_positions:
@@ -833,15 +845,40 @@ class WalkForwardValidator:
 
 
 # =============================================================================
-# 第八部分：回測
+# 第八部分：回測（使用 FinLab 官方建議方式）
 # =============================================================================
+def create_position_from_portfolio(portfolio_dict: Dict[str, float],
+                                    close: pd.DataFrame,
+                                    date_idx) -> pd.Series:
+    """
+    從投資組合字典建立符合 FinLab 格式的持倉 Series
+
+    Args:
+        portfolio_dict: 股票代碼 -> 權重 的字典
+        close: FinLab 的收盤價 DataFrame（用於取得正確的索引格式）
+        date_idx: 日期索引（必須是 close.index 中的值）
+    """
+    # 建立一個與 close 相同 columns 的 Series，值為 0
+    pos = pd.Series(0.0, index=close.columns, name=date_idx)
+
+    # 填入投資組合權重
+    for stock_id, weight in portfolio_dict.items():
+        if stock_id in pos.index:
+            pos[stock_id] = weight
+
+    return pos
+
+
 def run_backtest(model: StockTransformer, features: np.ndarray,
                  market_states: np.ndarray, stock_ids: List[str],
                  dates: pd.DatetimeIndex, start_date: str,
                  name: str = "Transformer_Strategy",
                  upload: bool = True) -> Any:
-    """執行回測"""
+    """執行回測 - 使用 FinLab 官方建議的方式"""
     print(f"\n📊 執行回測: {name}")
+
+    # 取得 FinLab 原始收盤價數據（保持原始索引格式）
+    close = data.get('price:收盤價')
 
     model.eval()
 
@@ -856,7 +893,6 @@ def run_backtest(model: StockTransformer, features: np.ndarray,
             break
 
     positions = []
-    valid_dates = []
 
     with torch.no_grad():
         for i in range(start_idx, len(dates) - 20, 20):  # 每月換股
@@ -865,28 +901,33 @@ def run_backtest(model: StockTransformer, features: np.ndarray,
 
             portfolio = model.get_portfolio(feat.squeeze(0), state.squeeze(0), stock_ids)
 
-            pos_series = pd.Series(portfolio, name=dates[i])
-            positions.append(pos_series)
-            valid_dates.append(dates[i])
+            # 找到 close 中對應的日期（確保格式一致）
+            target_date = dates[i]
+            # 在 close.index 中找最接近的日期
+            close_dates = pd.to_datetime(close.index)
+            date_mask = close_dates <= target_date
+            if date_mask.any():
+                actual_date = close.index[date_mask][-1]
+                pos = create_position_from_portfolio(portfolio, close, actual_date)
+                positions.append(pos)
 
     if not positions:
         print("   ⚠️ 無有效持倉")
         return None
 
+    # 合併成 DataFrame（索引格式與 FinLab 數據一致）
     position_df = pd.concat(positions, axis=1).T
     position_df = position_df.fillna(0)
 
-    # 將 index 轉換為字串格式以匹配 FinLab 內部數據格式
-    position_df.index = pd.to_datetime(valid_dates).strftime('%Y-%m-%d')
-
     print(f"   持倉 DataFrame: {position_df.shape}")
+    print(f"   期間: {position_df.index[0]} ~ {position_df.index[-1]}")
 
     # 執行 FinLab 回測
     report = sim(
         position=position_df,
         fee_ratio=1.425 / 1000,
         tax_ratio=3 / 1000,
-        trade_at_price="high_low_avg",
+        trade_at_price="open",
         position_limit=config.position_limit,
         stop_loss=0.15,
         trail_stop=0.25,
@@ -907,11 +948,26 @@ def run_backtest_from_positions(position_df: pd.DataFrame, name: str, upload: bo
         print("   ⚠️ 無有效持倉")
         return None
 
-    # 確保 index 格式與 FinLab 一致
-    # FinLab 內部數據使用字串格式的日期（如 "2023-01-01"）
+    # 取得 FinLab 原始收盤價數據（用於確保索引格式一致）
+    close = data.get('price:收盤價')
+
+    # 重新對齊 position_df 的索引到 close 的索引格式
     position_df = position_df.copy()
-    # 轉換為字串格式以匹配 FinLab 內部數據
-    position_df.index = pd.to_datetime(position_df.index).strftime('%Y-%m-%d')
+
+    # 將 position_df 的日期索引對齊到 close 的索引
+    new_index = []
+    close_dates = pd.to_datetime(close.index)
+
+    for idx in position_df.index:
+        target_date = pd.to_datetime(idx)
+        date_mask = close_dates <= target_date
+        if date_mask.any():
+            actual_date = close.index[date_mask][-1]
+            new_index.append(actual_date)
+        else:
+            new_index.append(close.index[0])
+
+    position_df.index = new_index
 
     print(f"\n📊 執行回測: {name}")
     print(f"   持倉 DataFrame: {position_df.shape}")
@@ -921,7 +977,7 @@ def run_backtest_from_positions(position_df: pd.DataFrame, name: str, upload: bo
         position=position_df,
         fee_ratio=1.425 / 1000,
         tax_ratio=3 / 1000,
-        trade_at_price="high_low_avg",
+        trade_at_price="open",
         position_limit=config.position_limit,
         stop_loss=0.15,
         trail_stop=0.25,
