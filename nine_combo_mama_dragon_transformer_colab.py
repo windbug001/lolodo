@@ -996,35 +996,38 @@ def main(use_walk_forward: bool = True):
         trainer = Trainer(model, config)
         trainer.fit(train_loader, val_loader)
 
-        # 樣本內回測
-        print("\n" + "="*60)
-        print("📊 樣本內回測 (2017-2022) - ⚠️ 僅供參考，可能過擬合")
-        print("="*60)
+        # 生成持倉
+        print("\n📊 生成持倉...")
+        model.eval()
+        positions = []
+        valid_dates = []
 
-        in_sample_report = run_backtest(
-            model, features, market_states, stock_ids, dates,
-            start_date=config.train_start,
-            name="Transformer_MamaDragon_InSample",
-            upload=True
-        )
+        with torch.no_grad():
+            for i in range(train_end_idx, len(dates) - 20, 20):
+                feat = torch.FloatTensor(features[i]).to(device)
+                state = torch.LongTensor([market_states[i]]).to(device)
+                portfolio = model.get_portfolio(feat, state.squeeze(0), stock_ids)
+                pos_series = pd.Series(portfolio, name=dates[i])
+                positions.append(pos_series)
+                valid_dates.append(dates[i])
 
-        if in_sample_report:
-            in_sample_report.display()
+        if positions:
+            position_df = pd.concat(positions, axis=1).T
+            position_df.index = pd.to_datetime(position_df.index)
+            position_df = position_df.fillna(0)
 
-        # 樣本外回測
-        print("\n" + "="*60)
-        print("📊 樣本外回測 (2023-至今) - 真實表現")
-        print("="*60)
+            print("\n" + "="*60)
+            print("📊 樣本外回測 (2023-至今)")
+            print("="*60)
 
-        out_sample_report = run_backtest(
-            model, features, market_states, stock_ids, dates,
-            start_date=config.test_start,
-            name="Transformer_MamaDragon_OutSample",
-            upload=True
-        )
+            report = run_backtest_from_positions(
+                position_df,
+                name="Transformer_MamaDragon_OutSample",
+                upload=True
+            )
 
-        if out_sample_report:
-            out_sample_report.display()
+            if report:
+                report.display()
 
         print("\n✅ 完成!")
 
