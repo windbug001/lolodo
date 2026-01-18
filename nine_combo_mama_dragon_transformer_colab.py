@@ -795,7 +795,8 @@ class WalkForwardValidator:
 
             if positions:
                 position_df = pd.concat(positions, axis=1).T
-                position_df.index = pd.DatetimeIndex(pd.to_datetime(valid_dates_fold))
+                # 使用字串格式日期以匹配 FinLab 內部數據格式
+                position_df.index = pd.to_datetime(valid_dates_fold).strftime('%Y-%m-%d')
                 position_df = position_df.fillna(0)
                 all_positions.append(position_df)
 
@@ -873,8 +874,10 @@ def run_backtest(model: StockTransformer, features: np.ndarray,
         return None
 
     position_df = pd.concat(positions, axis=1).T
-    position_df.index = pd.DatetimeIndex(pd.to_datetime(valid_dates))
     position_df = position_df.fillna(0)
+
+    # 將 index 轉換為字串格式以匹配 FinLab 內部數據格式
+    position_df.index = pd.to_datetime(valid_dates).strftime('%Y-%m-%d')
 
     print(f"   持倉 DataFrame: {position_df.shape}")
 
@@ -905,10 +908,10 @@ def run_backtest_from_positions(position_df: pd.DataFrame, name: str, upload: bo
         return None
 
     # 確保 index 格式與 FinLab 一致
-    # FinLab 內部使用 DatetimeIndex，需要確保格式正確
+    # FinLab 內部數據使用字串格式的日期（如 "2023-01-01"）
     position_df = position_df.copy()
-    # 先轉成 DatetimeIndex，再讓 pandas 標準化格式
-    position_df.index = pd.DatetimeIndex(pd.to_datetime(position_df.index))
+    # 轉換為字串格式以匹配 FinLab 內部數據
+    position_df.index = pd.to_datetime(position_df.index).strftime('%Y-%m-%d')
 
     print(f"\n📊 執行回測: {name}")
     print(f"   持倉 DataFrame: {position_df.shape}")
