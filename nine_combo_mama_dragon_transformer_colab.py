@@ -6,20 +6,12 @@
 Nine Combo Mama Dragon Transformer - Full Implementation
 ================================================================================
 
-【執行環境】Google Colab Pro+ (GPU T4/V100/A100)
+【執行環境】VS Code / 本機 Python 環境 (建議有 GPU)
 
 【執行方式】
-```python
-# 在 Colab 中執行：
-!pip install torch finlab -q
-
-# 設定環境變數
-import os
-os.environ['FINLAB_API_KEY'] = 'your_api_key'
-
-# 執行
-%run nine_combo_mama_dragon_transformer_colab.py
-```
+1. 安裝套件: pip install torch finlab
+2. 設定環境變數 FINLAB_API_KEY，或在下方直接填入
+3. 執行: python nine_combo_mama_dragon_transformer_colab.py
 
 ================================================================================
 """
@@ -82,8 +74,17 @@ from finlab import data
 from finlab.backtest import sim
 
 # FinLab 登入
-FINLAB_API_KEY = os.environ.get('FINLAB_API_KEY',
-    "R5XcZHGBZgEO5zz+6e1iYAe3wcFiimTUNaCMKsnZEiM42Wp49xW46MySUZT1W/Ee#vip_m")
+# 方法1: 設定環境變數 FINLAB_API_KEY
+# 方法2: 直接在下方填入 API Key
+FINLAB_API_KEY = os.environ.get('FINLAB_API_KEY', '')
+
+# 若環境變數未設定，可在此直接填入（不建議，較不安全）
+if not FINLAB_API_KEY:
+    FINLAB_API_KEY = ''  # 在此填入你的 API Key
+
+if not FINLAB_API_KEY:
+    raise ValueError("請設定 FINLAB_API_KEY 環境變數，或在程式碼中直接填入")
+
 finlab.login(FINLAB_API_KEY)
 print(f"✅ FinLab 登入成功")
 
