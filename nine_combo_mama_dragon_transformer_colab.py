@@ -1,0 +1,844 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+================================================================================
+🐉 九組合媽媽龍 Transformer v1.0 - 完整可執行版本
+Nine Combo Mama Dragon Transformer - Full Implementation
+================================================================================
+
+【執行環境】Google Colab Pro+ (GPU T4/V100/A100)
+
+【執行方式】
+```python
+# 在 Colab 中執行：
+!pip install torch finlab -q
+
+# 設定環境變數
+import os
+os.environ['FINLAB_API_KEY'] = 'your_api_key'
+
+# 執行
+%run nine_combo_mama_dragon_transformer_colab.py
+```
+
+================================================================================
+"""
+
+from __future__ import annotations
+
+import os
+import math
+import time
+import json
+import pickle
+import warnings
+import random
+from datetime import datetime, timedelta
+from pathlib import Path
+from typing import Dict, List, Tuple, Optional, Any
+from collections import defaultdict
+
+import numpy as np
+import pandas as pd
+
+warnings.filterwarnings('ignore')
+
+# =============================================================================
+# 第一部分：環境設定
+# =============================================================================
+print("🔧 設定環境...")
+
+# 安裝套件
+def install_packages():
+    import subprocess
+    packages = ['torch', 'finlab']
+    for pkg in packages:
+        try:
+            __import__(pkg.split('[')[0])
+        except ImportError:
+            print(f"   安裝 {pkg}...")
+            subprocess.run(['pip', 'install', pkg, '-q'], check=True)
+
+install_packages()
+
+# 載入 PyTorch
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+import torch.optim as optim
+from torch.utils.data import Dataset, DataLoader, TensorDataset
+
+# 設定 device
+if torch.cuda.is_available():
+    device = torch.device('cuda')
+    print(f"✅ GPU 模式: {torch.cuda.get_device_name(0)}")
+else:
+    device = torch.device('cpu')
+    print("⚠️ CPU 模式（建議使用 GPU）")
+
+# 載入 FinLab
+import finlab
+from finlab import data
+from finlab.backtest import sim
+
+# FinLab 登入
+FINLAB_API_KEY = os.environ.get('FINLAB_API_KEY',
+    "R5XcZHGBZgEO5zz+6e1iYAe3wcFiimTUNaCMKsnZEiM42Wp49xW46MySUZT1W/Ee#vip_m")
+finlab.login(FINLAB_API_KEY)
+print(f"✅ FinLab 登入成功")
+
+# =============================================================================
+# 第二部分：配置
+# =============================================================================
+class Config:
+    """模型與訓練配置"""
+
+    # 模型架構
+    d_model = 128           # 嵌入維度（減小以加速訓練）
+    n_heads = 4             # 注意力頭數
+    n_layers = 4            # Transformer 層數
+    d_ff = 512              # FFN 維度
+    dropout = 0.1
+    max_stocks = 1500
+
+    # 特徵數量
+    n_features = 50         # 總特徵數
+
+    # 選股設定
+    top_k = 15              # 選取 Top-K 股票
+    position_limit = 0.15   # 單股最大持倉
+
+    # 訓練設定
+    batch_size = 16
+    learning_rate = 5e-4
+    weight_decay = 1e-4
+    epochs = 50
+    patience = 8
+
+    # 回測設定
+    train_start = '2017-01-01'
+    train_end = '2022-12-31'
+    test_start = '2023-01-01'
+
+    # 市場狀態
+    market_states = 3       # BEAR=0, RANGE=1, BULL=2
+
+config = Config()
+
+# =============================================================================
+# 第三部分：數據載入
+# =============================================================================
+class FinLabDataLoader:
+    """FinLab 數據載入器"""
+
+    _cache = {}
+
+    @classmethod
+    def load_all(cls):
+        """載入所有需要的數據"""
+        if cls._cache:
+            return
+
+        print("📦 載入 FinLab 數據...")
+        start = time.time()
+
+        # 價格數據
+        cls._cache['close'] = data.get('price:收盤價')
+        cls._cache['open'] = data.get('price:開盤價')
+        cls._cache['high'] = data.get('price:最高價')
+        cls._cache['low'] = data.get('price:最低價')
+        cls._cache['volume'] = data.get('price:成交股數')
+
+        # 估值數據
+        cls._cache['pe'] = data.get('price_earning_ratio:本益比')
+        cls._cache['pb'] = data.get('price_earning_ratio:股價淨值比')
+        cls._cache['dividend'] = data.get('price_earning_ratio:殖利率(%)')
+
+        # 營收數據
+        cls._cache['rev'] = data.get('monthly_revenue:當月營收')
+        cls._cache['rev_yoy'] = data.get('monthly_revenue:去年同月增減(%)')
+
+        # 基本面
+        cls._cache['roe'] = data.get('fundamental_features:ROE綜合損益')
+        cls._cache['gpm'] = data.get('fundamental_features:營業毛利率')
+        cls._cache['npm'] = data.get('fundamental_features:稅後淨利率')
+        cls._cache['oig'] = data.get('fundamental_features:營業利益成長率')
+
+        # 籌碼
+        cls._cache['margin'] = data.get('margin_transactions:融資使用率')
+
+        # 市值
+        cls._cache['market_cap'] = data.get('etl:market_value')
+
+        print(f"✅ 數據載入完成 ({time.time()-start:.1f}s)")
+
+    @classmethod
+    def get(cls, key: str) -> pd.DataFrame:
+        if not cls._cache:
+            cls.load_all()
+        return cls._cache.get(key)
+
+
+# =============================================================================
+# 第四部分：特徵工程
+# =============================================================================
+class FeatureExtractor:
+    """股票特徵提取器"""
+
+    def __init__(self):
+        FinLabDataLoader.load_all()
+        self.close = FinLabDataLoader.get('close')
+        self.feature_names = []
+
+    def extract_all_features(self, lookback: int = 60) -> Tuple[np.ndarray, List[str], pd.DatetimeIndex]:
+        """
+        提取所有日期的特徵
+
+        Returns:
+            features: (n_dates, n_stocks, n_features)
+            stock_ids: 股票列表
+            dates: 日期索引
+        """
+        print("🔧 提取特徵...")
+        start = time.time()
+
+        close = FinLabDataLoader.get('close')
+        high = FinLabDataLoader.get('high')
+        low = FinLabDataLoader.get('low')
+        volume = FinLabDataLoader.get('volume')
+        pe = FinLabDataLoader.get('pe')
+        pb = FinLabDataLoader.get('pb')
+        dividend = FinLabDataLoader.get('dividend')
+        rev = FinLabDataLoader.get('rev')
+        rev_yoy = FinLabDataLoader.get('rev_yoy')
+        roe = FinLabDataLoader.get('roe')
+        gpm = FinLabDataLoader.get('gpm')
+        npm = FinLabDataLoader.get('npm')
+        margin = FinLabDataLoader.get('margin')
+        market_cap = FinLabDataLoader.get('market_cap')
+
+        # 找共同股票
+        common_stocks = close.columns
+        n_stocks = len(common_stocks)
+
+        # 確保所有 DataFrame 的 index 都是 DatetimeIndex
+        close = close.copy()
+        close.index = pd.to_datetime(close.index)
+
+        # 計算衍生特徵
+        returns_1d = close.pct_change(1)
+        returns_5d = close.pct_change(5)
+        returns_20d = close.pct_change(20)
+        returns_60d = close.pct_change(60)
+
+        ma5 = close.rolling(5).mean()
+        ma20 = close.rolling(20).mean()
+        ma60 = close.rolling(60).mean()
+
+        vol_ma5 = volume.rolling(5).mean()
+        vol_ma20 = volume.rolling(20).mean()
+
+        volatility_20d = returns_1d.rolling(20).std()
+
+        # RSI
+        delta = close.diff()
+        gain = delta.where(delta > 0, 0).rolling(14).mean()
+        loss = (-delta.where(delta < 0, 0)).rolling(14).mean()
+        rs = gain / (loss + 1e-10)
+        rsi = 100 - (100 / (1 + rs))
+
+        # 價格位置
+        high_60 = close.rolling(60).max()
+        low_60 = close.rolling(60).min()
+        price_position = (close - low_60) / (high_60 - low_60 + 1e-10)
+
+        # 對齊月營收數據到日頻率（使用 ffill 前向填充）
+        rev_daily = rev.reindex(close.index, method='ffill')
+        rev_yoy_daily = rev_yoy.reindex(close.index, method='ffill')
+        rev_ma3 = rev_daily.rolling(3, min_periods=1).mean()
+        rev_ma12 = rev_daily.rolling(12, min_periods=1).mean()
+
+        # 對齊其他低頻數據到日頻率
+        pe_daily = pe.reindex(close.index, method='ffill') if pe is not None else None
+        pb_daily = pb.reindex(close.index, method='ffill') if pb is not None else None
+        dividend_daily = dividend.reindex(close.index, method='ffill') if dividend is not None else None
+        roe_daily = roe.reindex(close.index, method='ffill') if roe is not None else None
+        gpm_daily = gpm.reindex(close.index, method='ffill') if gpm is not None else None
+        npm_daily = npm.reindex(close.index, method='ffill') if npm is not None else None
+        margin_daily = margin.reindex(close.index, method='ffill') if margin is not None else None
+        market_cap_daily = market_cap.reindex(close.index, method='ffill') if market_cap is not None else None
+
+        # 建立特徵字典
+        feature_dict = {
+            # 報酬率 (4)
+            'ret_1d': returns_1d,
+            'ret_5d': returns_5d,
+            'ret_20d': returns_20d,
+            'ret_60d': returns_60d,
+
+            # 均線偏離 (3)
+            'ma5_dev': close / ma5 - 1,
+            'ma20_dev': close / ma20 - 1,
+            'ma60_dev': close / ma60 - 1,
+
+            # 均線趨勢 (2)
+            'ma5_gt_ma20': (ma5 > ma20).astype(float),
+            'ma20_gt_ma60': (ma20 > ma60).astype(float),
+
+            # 波動率 (2)
+            'volatility': volatility_20d,
+            'volatility_rank': volatility_20d.rank(axis=1, pct=True),
+
+            # 成交量 (3)
+            'vol_ma_ratio': volume / vol_ma20,
+            'vol_trend': vol_ma5 / vol_ma20,
+            'vol_rank': volume.rank(axis=1, pct=True),
+
+            # RSI (3)
+            'rsi': rsi / 100,
+            'rsi_oversold': (rsi < 30).astype(float),
+            'rsi_overbought': (rsi > 70).astype(float),
+
+            # 價格位置 (3)
+            'price_position': price_position,
+            'new_high_20': (close >= close.rolling(20).max()).astype(float),
+            'new_high_60': (close >= close.rolling(60).max()).astype(float),
+
+            # 估值 (6)
+            'pe_rank': pe_daily.rank(axis=1, pct=True) if pe_daily is not None else None,
+            'pb_rank': pb_daily.rank(axis=1, pct=True) if pb_daily is not None else None,
+            'dividend_rank': dividend_daily.rank(axis=1, pct=True) if dividend_daily is not None else None,
+            'pe_valid': ((pe_daily > 0) & (pe_daily < 100)).astype(float) if pe_daily is not None else None,
+            'pb_valid': ((pb_daily > 0) & (pb_daily < 10)).astype(float) if pb_daily is not None else None,
+            'high_dividend': (dividend_daily > 3).astype(float) if dividend_daily is not None else None,
+
+            # 營收 (4)
+            'rev_yoy_rank': rev_yoy_daily.rank(axis=1, pct=True),
+            'rev_positive': (rev_yoy_daily > 0).astype(float),
+            'rev_strong': (rev_yoy_daily > 20).astype(float),
+            'rev_ma3_ma12': rev_ma3 / (rev_ma12 + 1e-10),
+
+            # 獲利能力 (4)
+            'roe_rank': roe_daily.rank(axis=1, pct=True) if roe_daily is not None else None,
+            'gpm_rank': gpm_daily.rank(axis=1, pct=True) if gpm_daily is not None else None,
+            'npm_rank': npm_daily.rank(axis=1, pct=True) if npm_daily is not None else None,
+            'roe_positive': (roe_daily > 0).astype(float) if roe_daily is not None else None,
+
+            # 籌碼 (2)
+            'margin_rank': margin_daily.rank(axis=1, pct=True) if margin_daily is not None else None,
+            'margin_low': (margin_daily < 30).astype(float) if margin_daily is not None else None,
+
+            # 市值 (2)
+            'market_cap_rank': market_cap_daily.rank(axis=1, pct=True) if market_cap_daily is not None else None,
+            'small_cap': (market_cap_daily.rank(axis=1, pct=True) < 0.3).astype(float) if market_cap_daily is not None else None,
+        }
+
+        # 過濾掉 None 值的特徵
+        feature_dict = {k: v for k, v in feature_dict.items() if v is not None}
+
+        self.feature_names = list(feature_dict.keys())
+        n_features = len(self.feature_names)
+
+        # 對齊所有特徵到共同日期
+        common_dates = close.index[lookback:]
+        n_dates = len(common_dates)
+
+        print(f"   特徵數: {n_features}, 日期數: {n_dates}, 股票數: {n_stocks}")
+
+        # 構建特徵張量
+        features = np.zeros((n_dates, n_stocks, n_features), dtype=np.float32)
+
+        for i, (name, df) in enumerate(feature_dict.items()):
+            if df is not None:
+                # 確保 df 的 index 是 DatetimeIndex
+                df = df.copy()
+                df.index = pd.to_datetime(df.index)
+                # 對齊
+                aligned = df.reindex(index=common_dates, columns=common_stocks)
+                # 標準化
+                aligned = (aligned - aligned.mean()) / (aligned.std() + 1e-10)
+                # 裁剪
+                aligned = aligned.clip(-5, 5)
+                # 填充
+                aligned = aligned.fillna(0)
+                features[:, :, i] = aligned.values
+
+        print(f"✅ 特徵提取完成 ({time.time()-start:.1f}s)")
+        print(f"   特徵張量形狀: {features.shape}")
+
+        return features, list(common_stocks), common_dates
+
+
+# =============================================================================
+# 第五部分：計算標籤（未來報酬）
+# =============================================================================
+def compute_labels(close: pd.DataFrame, dates: pd.DatetimeIndex,
+                   horizon: int = 20, top_pct: float = 0.1) -> np.ndarray:
+    """
+    計算標籤：未來 horizon 天的報酬率是否為前 top_pct%
+
+    Returns:
+        labels: (n_dates, n_stocks) 二元標籤
+    """
+    print(f"📊 計算標籤（預測 {horizon} 天後報酬）...")
+
+    # 確保 index 是 DatetimeIndex
+    close = close.copy()
+    close.index = pd.to_datetime(close.index)
+
+    # 計算未來報酬
+    future_returns = close.pct_change(horizon).shift(-horizon)
+
+    # 對齊
+    aligned = future_returns.reindex(index=dates)
+
+    # 計算每日的報酬排名，取前 top_pct% 為正例
+    labels = (aligned.rank(axis=1, pct=True) > (1 - top_pct)).astype(float)
+    labels = labels.fillna(0).values
+
+    print(f"   標籤形狀: {labels.shape}")
+    print(f"   正例比例: {labels.mean()*100:.1f}%")
+
+    return labels
+
+
+def compute_future_returns(close: pd.DataFrame, dates: pd.DatetimeIndex,
+                           horizon: int = 20) -> np.ndarray:
+    """計算未來報酬（用於 Sharpe 損失）"""
+    # 確保 index 是 DatetimeIndex
+    close = close.copy()
+    close.index = pd.to_datetime(close.index)
+
+    future_returns = close.pct_change(1).shift(-1)
+    aligned = future_returns.reindex(index=dates)
+
+    # 構建 (n_dates, n_stocks, horizon) 張量
+    n_dates = len(dates)
+    n_stocks = len(close.columns)
+
+    returns_tensor = np.zeros((n_dates, n_stocks, horizon), dtype=np.float32)
+
+    for i in range(n_dates):
+        if i + horizon < len(close):
+            end_idx = dates[i]
+            # 獲取未來 horizon 天的報酬
+            future_slice = future_returns.loc[dates[i]:].iloc[:horizon]
+            if len(future_slice) == horizon:
+                returns_tensor[i] = future_slice.values.T
+
+    return returns_tensor
+
+
+def compute_market_state(close: pd.DataFrame, dates: pd.DatetimeIndex) -> np.ndarray:
+    """
+    計算市場狀態
+
+    Returns:
+        market_state: (n_dates,) 0=BEAR, 1=RANGE, 2=BULL
+    """
+    print("📊 計算市場狀態...")
+
+    # 確保 index 是 DatetimeIndex
+    close = close.copy()
+    close.index = pd.to_datetime(close.index)
+
+    # 使用市場平均價格
+    market_avg = close.mean(axis=1)
+
+    ma40 = market_avg.rolling(40).mean()
+    ma120 = market_avg.rolling(120).mean()
+    trend = ma40.pct_change(20)
+
+    # 判斷狀態
+    bull = (market_avg > ma40) & (ma40 > ma120) & (trend > 0.02)
+    bear = (market_avg < ma40) & (ma40 < ma120) & (trend < -0.02)
+
+    market_state = np.ones(len(close), dtype=np.int64)  # 預設 RANGE
+    market_state[bull] = 2  # BULL
+    market_state[bear] = 0  # BEAR
+
+    # 對齊到 dates
+    state_series = pd.Series(market_state, index=close.index)
+    aligned = state_series.reindex(index=dates).fillna(1).astype(np.int64)
+
+    print(f"   BEAR: {(aligned.values==0).sum()}, RANGE: {(aligned.values==1).sum()}, BULL: {(aligned.values==2).sum()}")
+
+    return aligned.values
+
+
+# =============================================================================
+# 第六部分：Transformer 模型
+# =============================================================================
+class StockTransformer(nn.Module):
+    """股票選擇 Transformer"""
+
+    def __init__(self, config: Config):
+        super().__init__()
+        self.config = config
+
+        # 特徵嵌入
+        self.feature_embed = nn.Sequential(
+            nn.Linear(config.n_features, config.d_model),
+            nn.LayerNorm(config.d_model),
+            nn.Dropout(config.dropout)
+        )
+
+        # 市場狀態嵌入
+        self.market_embed = nn.Embedding(config.market_states, config.d_model)
+
+        # Transformer 編碼器
+        encoder_layer = nn.TransformerEncoderLayer(
+            d_model=config.d_model,
+            nhead=config.n_heads,
+            dim_feedforward=config.d_ff,
+            dropout=config.dropout,
+            activation='gelu',
+            batch_first=True
+        )
+        self.transformer = nn.TransformerEncoder(encoder_layer, num_layers=config.n_layers)
+
+        # 輸出頭
+        self.score_head = nn.Sequential(
+            nn.Linear(config.d_model, config.d_model // 2),
+            nn.GELU(),
+            nn.Dropout(config.dropout),
+            nn.Linear(config.d_model // 2, 1)
+        )
+
+        # 初始化
+        self._init_weights()
+
+    def _init_weights(self):
+        for module in self.modules():
+            if isinstance(module, nn.Linear):
+                nn.init.xavier_uniform_(module.weight)
+                if module.bias is not None:
+                    nn.init.zeros_(module.bias)
+            elif isinstance(module, nn.Embedding):
+                nn.init.normal_(module.weight, std=0.02)
+
+    def forward(self, features: torch.Tensor, market_state: torch.Tensor):
+        """
+        Args:
+            features: (batch, n_stocks, n_features)
+            market_state: (batch,)
+
+        Returns:
+            scores: (batch, n_stocks)
+        """
+        batch_size, n_stocks, _ = features.size()
+
+        # 特徵嵌入
+        x = self.feature_embed(features)  # (batch, n_stocks, d_model)
+
+        # 添加市場狀態
+        market = self.market_embed(market_state)  # (batch, d_model)
+        x = x + market.unsqueeze(1) * 0.1
+
+        # Transformer 編碼
+        x = self.transformer(x)  # (batch, n_stocks, d_model)
+
+        # 評分
+        scores = self.score_head(x).squeeze(-1)  # (batch, n_stocks)
+
+        return scores
+
+    def get_portfolio(self, features: torch.Tensor, market_state: torch.Tensor,
+                      stock_ids: List[str], top_k: int = None) -> Dict[str, float]:
+        """獲取投資組合"""
+        top_k = top_k or self.config.top_k
+
+        self.eval()
+        with torch.no_grad():
+            scores = self.forward(features.unsqueeze(0), market_state.unsqueeze(0))
+            scores = scores.squeeze(0)
+
+            # Softmax
+            weights = F.softmax(scores, dim=-1)
+
+            # Top-K
+            top_weights, top_indices = torch.topk(weights, top_k)
+            top_weights = top_weights / top_weights.sum()
+
+            portfolio = {}
+            for w, idx in zip(top_weights.cpu().numpy(), top_indices.cpu().numpy()):
+                stock_id = stock_ids[idx]
+                portfolio[stock_id] = min(float(w), self.config.position_limit)
+
+            # 正規化
+            total = sum(portfolio.values())
+            portfolio = {k: v / total for k, v in portfolio.items()}
+
+            return portfolio
+
+
+# =============================================================================
+# 第七部分：訓練
+# =============================================================================
+class Trainer:
+    """模型訓練器"""
+
+    def __init__(self, model: StockTransformer, config: Config):
+        self.model = model.to(device)
+        self.config = config
+
+        self.optimizer = optim.AdamW(
+            model.parameters(),
+            lr=config.learning_rate,
+            weight_decay=config.weight_decay
+        )
+
+        self.scheduler = optim.lr_scheduler.CosineAnnealingLR(
+            self.optimizer, T_max=config.epochs
+        )
+
+        self.best_loss = float('inf')
+        self.patience_counter = 0
+        self.history = {'train_loss': [], 'val_loss': []}
+
+    def train_epoch(self, dataloader: DataLoader) -> float:
+        self.model.train()
+        total_loss = 0
+
+        for batch in dataloader:
+            features = batch[0].to(device)
+            market_state = batch[1].to(device)
+            labels = batch[2].to(device)
+
+            scores = self.model(features, market_state)
+
+            # BCE 損失
+            loss = F.binary_cross_entropy_with_logits(scores, labels)
+
+            self.optimizer.zero_grad()
+            loss.backward()
+            torch.nn.utils.clip_grad_norm_(self.model.parameters(), 1.0)
+            self.optimizer.step()
+
+            total_loss += loss.item()
+
+        return total_loss / len(dataloader)
+
+    def validate(self, dataloader: DataLoader) -> float:
+        self.model.eval()
+        total_loss = 0
+
+        with torch.no_grad():
+            for batch in dataloader:
+                features = batch[0].to(device)
+                market_state = batch[1].to(device)
+                labels = batch[2].to(device)
+
+                scores = self.model(features, market_state)
+                loss = F.binary_cross_entropy_with_logits(scores, labels)
+                total_loss += loss.item()
+
+        return total_loss / len(dataloader)
+
+    def fit(self, train_loader: DataLoader, val_loader: DataLoader):
+        print(f"\n{'='*60}")
+        print(f"🚀 開始訓練 Transformer")
+        print(f"{'='*60}")
+
+        for epoch in range(self.config.epochs):
+            train_loss = self.train_epoch(train_loader)
+            val_loss = self.validate(val_loader)
+
+            self.scheduler.step()
+
+            self.history['train_loss'].append(train_loss)
+            self.history['val_loss'].append(val_loss)
+
+            print(f"Epoch {epoch+1}/{self.config.epochs} - "
+                  f"Train: {train_loss:.4f}, Val: {val_loss:.4f}")
+
+            if val_loss < self.best_loss:
+                self.best_loss = val_loss
+                self.patience_counter = 0
+                torch.save(self.model.state_dict(), 'best_model.pt')
+                print(f"   ✅ 最佳模型!")
+            else:
+                self.patience_counter += 1
+                if self.patience_counter >= self.config.patience:
+                    print(f"\n⚠️ Early stopping")
+                    break
+
+        # 載入最佳模型
+        self.model.load_state_dict(torch.load('best_model.pt'))
+        print(f"\n✅ 訓練完成!")
+
+
+# =============================================================================
+# 第八部分：回測
+# =============================================================================
+def run_backtest(model: StockTransformer, features: np.ndarray,
+                 market_states: np.ndarray, stock_ids: List[str],
+                 dates: pd.DatetimeIndex, start_date: str,
+                 name: str = "Transformer_Strategy",
+                 upload: bool = True) -> Any:
+    """執行回測"""
+    print(f"\n📊 執行回測: {name}")
+
+    model.eval()
+
+    # 轉換 start_date 為 Timestamp 以便比較
+    start_ts = pd.Timestamp(start_date)
+
+    # 找到開始日期的索引
+    start_idx = 0
+    for i, d in enumerate(dates):
+        if d >= start_ts:
+            start_idx = i
+            break
+
+    positions = []
+    valid_dates = []
+
+    with torch.no_grad():
+        for i in range(start_idx, len(dates) - 20, 20):  # 每月換股
+            feat = torch.FloatTensor(features[i]).unsqueeze(0).to(device)
+            state = torch.LongTensor([market_states[i]]).to(device)
+
+            portfolio = model.get_portfolio(feat.squeeze(0), state.squeeze(0), stock_ids)
+
+            pos_series = pd.Series(portfolio, name=dates[i])
+            positions.append(pos_series)
+            valid_dates.append(dates[i])
+
+    if not positions:
+        print("   ⚠️ 無有效持倉")
+        return None
+
+    position_df = pd.concat(positions, axis=1).T
+    position_df.index = pd.to_datetime(valid_dates)
+    position_df = position_df.fillna(0)
+
+    print(f"   持倉 DataFrame: {position_df.shape}")
+
+    # 執行 FinLab 回測
+    report = sim(
+        position=position_df,
+        fee_ratio=1.425 / 1000,
+        tax_ratio=3 / 1000,
+        trade_at_price="high_low_avg",
+        position_limit=config.position_limit,
+        stop_loss=0.15,
+        trail_stop=0.25,
+        take_profit=0.5,
+        upload=upload,
+        name=name
+    )
+
+    return report
+
+
+# =============================================================================
+# 第九部分：主程式
+# =============================================================================
+def main():
+    print("""
+╔════════════════════════════════════════════════════════════════╗
+║     🐉 九組合媽媽龍 Transformer v1.0                           ║
+║     Stock Selection with Transformer Architecture              ║
+╠════════════════════════════════════════════════════════════════╣
+║  📊 模型: Transformer Encoder (4層, 128維)                     ║
+║  🎯 目標: 學習選出未來高報酬股票                                ║
+║  📅 訓練: 2017-2022, 測試: 2023-至今                           ║
+╚════════════════════════════════════════════════════════════════╝
+    """)
+
+    # 1. 提取特徵
+    extractor = FeatureExtractor()
+    features, stock_ids, dates = extractor.extract_all_features()
+
+    # 2. 計算標籤和市場狀態
+    close = FinLabDataLoader.get('close')
+    labels = compute_labels(close, dates)
+    market_states = compute_market_state(close, dates)
+
+    # 3. 分割訓練/驗證/測試
+    train_end_ts = pd.Timestamp(config.train_end)
+    train_end_idx = 0
+    for i, d in enumerate(dates):
+        if d >= train_end_ts:
+            train_end_idx = i
+            break
+
+    val_split = int(train_end_idx * 0.8)
+
+    train_features = features[:val_split]
+    train_labels = labels[:val_split]
+    train_states = market_states[:val_split]
+
+    val_features = features[val_split:train_end_idx]
+    val_labels = labels[val_split:train_end_idx]
+    val_states = market_states[val_split:train_end_idx]
+
+    print(f"\n📊 數據分割:")
+    print(f"   訓練: {len(train_features)} 樣本")
+    print(f"   驗證: {len(val_features)} 樣本")
+    print(f"   測試: {len(features) - train_end_idx} 樣本")
+
+    # 4. 創建 DataLoader
+    train_dataset = TensorDataset(
+        torch.FloatTensor(train_features),
+        torch.LongTensor(train_states),
+        torch.FloatTensor(train_labels)
+    )
+    val_dataset = TensorDataset(
+        torch.FloatTensor(val_features),
+        torch.LongTensor(val_states),
+        torch.FloatTensor(val_labels)
+    )
+
+    train_loader = DataLoader(train_dataset, batch_size=config.batch_size, shuffle=True)
+    val_loader = DataLoader(val_dataset, batch_size=config.batch_size)
+
+    # 5. 創建模型
+    config.n_features = features.shape[2]
+    model = StockTransformer(config)
+
+    total_params = sum(p.numel() for p in model.parameters())
+    print(f"\n📊 模型參數: {total_params:,}")
+
+    # 6. 訓練
+    trainer = Trainer(model, config)
+    trainer.fit(train_loader, val_loader)
+
+    # 7. 樣本內回測
+    print("\n" + "="*60)
+    print("📊 樣本內回測 (2017-2022)")
+    print("="*60)
+
+    in_sample_report = run_backtest(
+        model, features, market_states, stock_ids, dates,
+        start_date=config.train_start,
+        name="Transformer_MamaDragon_InSample",
+        upload=True
+    )
+
+    if in_sample_report:
+        in_sample_report.display()
+
+    # 8. 樣本外回測
+    print("\n" + "="*60)
+    print("📊 樣本外回測 (2023-至今)")
+    print("="*60)
+
+    out_sample_report = run_backtest(
+        model, features, market_states, stock_ids, dates,
+        start_date=config.test_start,
+        name="Transformer_MamaDragon_OutSample",
+        upload=True
+    )
+
+    if out_sample_report:
+        out_sample_report.display()
+
+    print("\n✅ 完成!")
+
+    return model, trainer.history
+
+
+if __name__ == "__main__":
+    model, history = main()
