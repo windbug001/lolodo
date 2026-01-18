@@ -666,6 +666,172 @@ class Trainer:
 
 
 # =============================================================================
+# 第七部分 B：Walk-Forward 驗證器
+# =============================================================================
+class WalkForwardValidator:
+    """
+    Walk-Forward 滾動驗證器
+
+    每次訓練使用過去的數據，測試使用未來一年的數據
+    這樣可以避免過擬合，得到更真實的回測結果
+    """
+
+    def __init__(self, config: Config):
+        self.config = config
+        self.results = []
+
+    def run(self, features: np.ndarray, labels: np.ndarray,
+            market_states: np.ndarray, stock_ids: List[str],
+            dates: pd.DatetimeIndex) -> Tuple[List[pd.DataFrame], Dict]:
+        """
+        執行 Walk-Forward 驗證
+
+        Args:
+            features: 特徵張量 (n_dates, n_stocks, n_features)
+            labels: 標籤 (n_dates, n_stocks)
+            market_states: 市場狀態 (n_dates,)
+            stock_ids: 股票列表
+            dates: 日期索引
+
+        Returns:
+            all_positions: 每個 fold 的持倉 DataFrame 列表
+            summary: 驗證摘要
+        """
+        print(f"\n{'='*60}")
+        print(f"🔄 開始 Walk-Forward 驗證")
+        print(f"{'='*60}")
+
+        # 定義時間窗口（每年一個 fold）
+        years = sorted(set(d.year for d in dates))
+
+        # 至少需要 2 年訓練數據，所以從第 3 年開始測試
+        min_train_years = 2
+        test_years = years[min_train_years:]
+
+        print(f"📅 可用年份: {years}")
+        print(f"📅 測試年份: {test_years}")
+
+        all_positions = []
+        fold_results = []
+
+        for fold_idx, test_year in enumerate(test_years):
+            print(f"\n{'─'*60}")
+            print(f"📊 Fold {fold_idx + 1}/{len(test_years)}: 測試 {test_year} 年")
+            print(f"{'─'*60}")
+
+            # 找出訓練和測試的索引
+            train_mask = np.array([d.year < test_year for d in dates])
+            test_mask = np.array([d.year == test_year for d in dates])
+
+            train_indices = np.where(train_mask)[0]
+            test_indices = np.where(test_mask)[0]
+
+            if len(train_indices) < 100 or len(test_indices) < 20:
+                print(f"   ⚠️ 數據不足，跳過此 fold")
+                continue
+
+            # 分割訓練集為 train/val (80/20)
+            val_split = int(len(train_indices) * 0.8)
+            train_idx = train_indices[:val_split]
+            val_idx = train_indices[val_split:]
+
+            print(f"   訓練: {len(train_idx)} 樣本 ({dates[train_idx[0]].year}-{dates[train_idx[-1]].year})")
+            print(f"   驗證: {len(val_idx)} 樣本")
+            print(f"   測試: {len(test_indices)} 樣本 ({test_year})")
+
+            # 準備數據
+            train_features = features[train_idx]
+            train_labels = labels[train_idx]
+            train_states = market_states[train_idx]
+
+            val_features = features[val_idx]
+            val_labels = labels[val_idx]
+            val_states = market_states[val_idx]
+
+            # 創建 DataLoader
+            train_dataset = TensorDataset(
+                torch.FloatTensor(train_features),
+                torch.LongTensor(train_states),
+                torch.FloatTensor(train_labels)
+            )
+            val_dataset = TensorDataset(
+                torch.FloatTensor(val_features),
+                torch.LongTensor(val_states),
+                torch.FloatTensor(val_labels)
+            )
+
+            train_loader = DataLoader(train_dataset, batch_size=self.config.batch_size, shuffle=True)
+            val_loader = DataLoader(val_dataset, batch_size=self.config.batch_size)
+
+            # 創建新模型（每個 fold 從頭訓練）
+            model = StockTransformer(self.config)
+
+            # 訓練（減少 epochs 以加速）
+            fold_config = Config()
+            fold_config.n_features = self.config.n_features
+            fold_config.epochs = 30  # 減少訓練輪數
+            fold_config.patience = 5
+
+            trainer = Trainer(model, fold_config)
+            trainer.fit(train_loader, val_loader)
+
+            # 在測試期間生成持倉
+            model.eval()
+            positions = []
+            valid_dates_fold = []
+
+            with torch.no_grad():
+                for i in test_indices[::20]:  # 每月換股
+                    if i >= len(features):
+                        continue
+                    feat = torch.FloatTensor(features[i]).to(device)
+                    state = torch.LongTensor([market_states[i]]).to(device)
+
+                    portfolio = model.get_portfolio(feat, state.squeeze(0), stock_ids)
+
+                    pos_series = pd.Series(portfolio, name=dates[i])
+                    positions.append(pos_series)
+                    valid_dates_fold.append(dates[i])
+
+            if positions:
+                position_df = pd.concat(positions, axis=1).T
+                position_df.index = pd.to_datetime(valid_dates_fold)
+                position_df = position_df.fillna(0)
+                all_positions.append(position_df)
+
+                fold_results.append({
+                    'fold': fold_idx + 1,
+                    'test_year': test_year,
+                    'n_positions': len(positions),
+                    'train_loss': trainer.history['train_loss'][-1] if trainer.history['train_loss'] else None,
+                    'val_loss': trainer.history['val_loss'][-1] if trainer.history['val_loss'] else None,
+                })
+
+                print(f"   ✅ 生成 {len(positions)} 個持倉決策")
+
+        # 合併所有持倉
+        if all_positions:
+            combined_positions = pd.concat(all_positions, axis=0)
+            combined_positions = combined_positions.sort_index()
+        else:
+            combined_positions = pd.DataFrame()
+
+        summary = {
+            'n_folds': len(fold_results),
+            'fold_results': fold_results,
+            'total_positions': len(combined_positions) if not combined_positions.empty else 0,
+        }
+
+        print(f"\n{'='*60}")
+        print(f"✅ Walk-Forward 驗證完成")
+        print(f"   完成 {summary['n_folds']} 個 folds")
+        print(f"   總計 {summary['total_positions']} 個持倉決策")
+        print(f"{'='*60}")
+
+        return combined_positions, summary
+
+
+# =============================================================================
 # 第八部分：回測
 # =============================================================================
 def run_backtest(model: StockTransformer, features: np.ndarray,
@@ -732,15 +898,48 @@ def run_backtest(model: StockTransformer, features: np.ndarray,
 # =============================================================================
 # 第九部分：主程式
 # =============================================================================
-def main():
+def run_backtest_from_positions(position_df: pd.DataFrame, name: str, upload: bool = True) -> Any:
+    """從持倉 DataFrame 執行回測"""
+    if position_df.empty:
+        print("   ⚠️ 無有效持倉")
+        return None
+
+    print(f"\n📊 執行回測: {name}")
+    print(f"   持倉 DataFrame: {position_df.shape}")
+    print(f"   期間: {position_df.index[0]} ~ {position_df.index[-1]}")
+
+    report = sim(
+        position=position_df,
+        fee_ratio=1.425 / 1000,
+        tax_ratio=3 / 1000,
+        trade_at_price="high_low_avg",
+        position_limit=config.position_limit,
+        stop_loss=0.15,
+        trail_stop=0.25,
+        take_profit=0.5,
+        upload=upload,
+        name=name
+    )
+
+    return report
+
+
+def main(use_walk_forward: bool = True):
+    """
+    主程式
+
+    Args:
+        use_walk_forward: 是否使用 Walk-Forward 驗證（預設 True）
+                         設為 False 則使用傳統單次訓練方式
+    """
     print("""
 ╔════════════════════════════════════════════════════════════════╗
-║     🐉 九組合媽媽龍 Transformer v1.0                           ║
+║     🐉 九組合媽媽龍 Transformer v2.0                           ║
 ║     Stock Selection with Transformer Architecture              ║
 ╠════════════════════════════════════════════════════════════════╣
 ║  📊 模型: Transformer Encoder (4層, 128維)                     ║
 ║  🎯 目標: 學習選出未來高報酬股票                                ║
-║  📅 訓練: 2017-2022, 測試: 2023-至今                           ║
+║  🔄 驗證: Walk-Forward 滾動驗證（避免過擬合）                   ║
 ╚════════════════════════════════════════════════════════════════╝
     """)
 
@@ -753,89 +952,133 @@ def main():
     labels = compute_labels(close, dates)
     market_states = compute_market_state(close, dates)
 
-    # 3. 分割訓練/驗證/測試
-    train_end_ts = pd.Timestamp(config.train_end)
-    train_end_idx = 0
-    for i, d in enumerate(dates):
-        if d >= train_end_ts:
-            train_end_idx = i
-            break
-
-    val_split = int(train_end_idx * 0.8)
-
-    train_features = features[:val_split]
-    train_labels = labels[:val_split]
-    train_states = market_states[:val_split]
-
-    val_features = features[val_split:train_end_idx]
-    val_labels = labels[val_split:train_end_idx]
-    val_states = market_states[val_split:train_end_idx]
-
-    print(f"\n📊 數據分割:")
-    print(f"   訓練: {len(train_features)} 樣本")
-    print(f"   驗證: {len(val_features)} 樣本")
-    print(f"   測試: {len(features) - train_end_idx} 樣本")
-
-    # 4. 創建 DataLoader
-    train_dataset = TensorDataset(
-        torch.FloatTensor(train_features),
-        torch.LongTensor(train_states),
-        torch.FloatTensor(train_labels)
-    )
-    val_dataset = TensorDataset(
-        torch.FloatTensor(val_features),
-        torch.LongTensor(val_states),
-        torch.FloatTensor(val_labels)
-    )
-
-    train_loader = DataLoader(train_dataset, batch_size=config.batch_size, shuffle=True)
-    val_loader = DataLoader(val_dataset, batch_size=config.batch_size)
-
-    # 5. 創建模型
+    # 更新 config
     config.n_features = features.shape[2]
-    model = StockTransformer(config)
 
-    total_params = sum(p.numel() for p in model.parameters())
-    print(f"\n📊 模型參數: {total_params:,}")
+    if use_walk_forward:
+        # =====================================================================
+        # Walk-Forward 驗證模式（推薦）
+        # =====================================================================
+        print("\n🔄 使用 Walk-Forward 驗證模式")
 
-    # 6. 訓練
-    trainer = Trainer(model, config)
-    trainer.fit(train_loader, val_loader)
+        validator = WalkForwardValidator(config)
+        combined_positions, summary = validator.run(
+            features, labels, market_states, stock_ids, dates
+        )
 
-    # 7. 樣本內回測
-    print("\n" + "="*60)
-    print("📊 樣本內回測 (2017-2022)")
-    print("="*60)
+        # 執行整體回測
+        if not combined_positions.empty:
+            print("\n" + "="*60)
+            print("📊 Walk-Forward 整體回測結果")
+            print("="*60)
 
-    in_sample_report = run_backtest(
-        model, features, market_states, stock_ids, dates,
-        start_date=config.train_start,
-        name="Transformer_MamaDragon_InSample",
-        upload=True
-    )
+            report = run_backtest_from_positions(
+                combined_positions,
+                name="Transformer_MamaDragon_WalkForward",
+                upload=True
+            )
 
-    if in_sample_report:
-        in_sample_report.display()
+            if report:
+                report.display()
 
-    # 8. 樣本外回測
-    print("\n" + "="*60)
-    print("📊 樣本外回測 (2023-至今)")
-    print("="*60)
+            return None, summary
 
-    out_sample_report = run_backtest(
-        model, features, market_states, stock_ids, dates,
-        start_date=config.test_start,
-        name="Transformer_MamaDragon_OutSample",
-        upload=True
-    )
+        else:
+            print("⚠️ 無有效的持倉數據")
+            return None, summary
 
-    if out_sample_report:
-        out_sample_report.display()
+    else:
+        # =====================================================================
+        # 傳統單次訓練模式
+        # =====================================================================
+        print("\n📊 使用傳統單次訓練模式")
 
-    print("\n✅ 完成!")
+        # 分割訓練/驗證/測試
+        train_end_ts = pd.Timestamp(config.train_end)
+        train_end_idx = 0
+        for i, d in enumerate(dates):
+            if d >= train_end_ts:
+                train_end_idx = i
+                break
 
-    return model, trainer.history
+        val_split = int(train_end_idx * 0.8)
+
+        train_features = features[:val_split]
+        train_labels = labels[:val_split]
+        train_states = market_states[:val_split]
+
+        val_features = features[val_split:train_end_idx]
+        val_labels = labels[val_split:train_end_idx]
+        val_states = market_states[val_split:train_end_idx]
+
+        print(f"\n📊 數據分割:")
+        print(f"   訓練: {len(train_features)} 樣本")
+        print(f"   驗證: {len(val_features)} 樣本")
+        print(f"   測試: {len(features) - train_end_idx} 樣本")
+
+        # 創建 DataLoader
+        train_dataset = TensorDataset(
+            torch.FloatTensor(train_features),
+            torch.LongTensor(train_states),
+            torch.FloatTensor(train_labels)
+        )
+        val_dataset = TensorDataset(
+            torch.FloatTensor(val_features),
+            torch.LongTensor(val_states),
+            torch.FloatTensor(val_labels)
+        )
+
+        train_loader = DataLoader(train_dataset, batch_size=config.batch_size, shuffle=True)
+        val_loader = DataLoader(val_dataset, batch_size=config.batch_size)
+
+        # 創建模型
+        model = StockTransformer(config)
+
+        total_params = sum(p.numel() for p in model.parameters())
+        print(f"\n📊 模型參數: {total_params:,}")
+
+        # 訓練
+        trainer = Trainer(model, config)
+        trainer.fit(train_loader, val_loader)
+
+        # 樣本內回測
+        print("\n" + "="*60)
+        print("📊 樣本內回測 (2017-2022) - ⚠️ 僅供參考，可能過擬合")
+        print("="*60)
+
+        in_sample_report = run_backtest(
+            model, features, market_states, stock_ids, dates,
+            start_date=config.train_start,
+            name="Transformer_MamaDragon_InSample",
+            upload=True
+        )
+
+        if in_sample_report:
+            in_sample_report.display()
+
+        # 樣本外回測
+        print("\n" + "="*60)
+        print("📊 樣本外回測 (2023-至今) - 真實表現")
+        print("="*60)
+
+        out_sample_report = run_backtest(
+            model, features, market_states, stock_ids, dates,
+            start_date=config.test_start,
+            name="Transformer_MamaDragon_OutSample",
+            upload=True
+        )
+
+        if out_sample_report:
+            out_sample_report.display()
+
+        print("\n✅ 完成!")
+
+        return model, trainer.history
 
 
 if __name__ == "__main__":
-    model, history = main()
+    # 使用 Walk-Forward 驗證（推薦，結果更真實）
+    model, result = main(use_walk_forward=True)
+
+    # 如果想用傳統方式，改成：
+    # model, history = main(use_walk_forward=False)
