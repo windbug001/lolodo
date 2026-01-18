@@ -942,7 +942,7 @@ def main(use_walk_forward: bool = True):
 
         if positions:
             position_df = pd.concat(positions, axis=1).T
-            position_df.index = pd.to_datetime(position_df.index)
+            # 保持原始索引格式（不轉換）
             position_df = position_df.fillna(0)
 
             print("\n" + "="*60)
