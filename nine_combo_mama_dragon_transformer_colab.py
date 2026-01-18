@@ -194,28 +194,33 @@ class FeatureExtractor:
         print("🔧 提取特徵...")
         start = time.time()
 
-        close = FinLabDataLoader.get('close')
-        high = FinLabDataLoader.get('high')
-        low = FinLabDataLoader.get('low')
-        volume = FinLabDataLoader.get('volume')
-        pe = FinLabDataLoader.get('pe')
-        pb = FinLabDataLoader.get('pb')
-        dividend = FinLabDataLoader.get('dividend')
-        rev = FinLabDataLoader.get('rev')
-        rev_yoy = FinLabDataLoader.get('rev_yoy')
-        roe = FinLabDataLoader.get('roe')
-        gpm = FinLabDataLoader.get('gpm')
-        npm = FinLabDataLoader.get('npm')
-        margin = FinLabDataLoader.get('margin')
-        market_cap = FinLabDataLoader.get('market_cap')
+        # 輔助函數：確保 DataFrame 的 index 是 DatetimeIndex
+        def ensure_datetime_index(df):
+            if df is None:
+                return None
+            df = df.copy()
+            df.index = pd.to_datetime(df.index)
+            return df
+
+        # 載入並轉換所有數據的 index
+        close = ensure_datetime_index(FinLabDataLoader.get('close'))
+        high = ensure_datetime_index(FinLabDataLoader.get('high'))
+        low = ensure_datetime_index(FinLabDataLoader.get('low'))
+        volume = ensure_datetime_index(FinLabDataLoader.get('volume'))
+        pe = ensure_datetime_index(FinLabDataLoader.get('pe'))
+        pb = ensure_datetime_index(FinLabDataLoader.get('pb'))
+        dividend = ensure_datetime_index(FinLabDataLoader.get('dividend'))
+        rev = ensure_datetime_index(FinLabDataLoader.get('rev'))
+        rev_yoy = ensure_datetime_index(FinLabDataLoader.get('rev_yoy'))
+        roe = ensure_datetime_index(FinLabDataLoader.get('roe'))
+        gpm = ensure_datetime_index(FinLabDataLoader.get('gpm'))
+        npm = ensure_datetime_index(FinLabDataLoader.get('npm'))
+        margin = ensure_datetime_index(FinLabDataLoader.get('margin'))
+        market_cap = ensure_datetime_index(FinLabDataLoader.get('market_cap'))
 
         # 找共同股票
         common_stocks = close.columns
         n_stocks = len(common_stocks)
-
-        # 確保所有 DataFrame 的 index 都是 DatetimeIndex
-        close = close.copy()
-        close.index = pd.to_datetime(close.index)
 
         # 計算衍生特徵
         returns_1d = close.pct_change(1)
