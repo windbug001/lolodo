@@ -62,7 +62,7 @@ pd.set_option('display.max_columns', None)
 pd.set_option('future.no_silent_downcasting', True)
 
 # === 🔥 核心設定（請修改）===
-WINDOW_ID = 1  # 🔥 視窗 ID (1-4)，多視窗執行時請修改此值
+WINDOW_ID = 1  # 🔥 視窗 ID，Dragon 群島請設 24-31，多視窗執行時請修改此值
 FINLAB_API_KEY = "R5XcZHGBZgEO5zz+6e1iYAe3wcFiimTUNaCMKsnZEiM42Wp49xW46MySUZT1W/Ee#vip_m"
 
 # 優化目標
