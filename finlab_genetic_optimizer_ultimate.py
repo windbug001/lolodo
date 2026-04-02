@@ -1171,15 +1171,50 @@ class ParetoArchiveManager:
         return unique
 
     def _save(self):
-        """保存"""
+        """保存（帶備份 + 原子寫入，保護現有精英不被丟失）"""
         try:
-            with open(self.archive_file, 'wb') as f:
+            # 1. 備份：保留上一版（.bak）和帶時間戳的歷史備份
+            if os.path.exists(self.archive_file):
+                import shutil
+                # 滾動備份：最近一份
+                bak_file = self.archive_file + '.bak'
+                shutil.copy2(self.archive_file, bak_file)
+                # 時間戳備份：每次都保留（防止任何意外）
+                ts = datetime.now().strftime('%Y%m%d_%H%M%S')
+                ts_bak = self.archive_file.replace('.pkl', f'_backup_{ts}.pkl')
+                shutil.copy2(self.archive_file, ts_bak)
+                # 清理過舊的時間戳備份（只保留最近 10 份）
+                bak_dir = os.path.dirname(self.archive_file)
+                base_name = os.path.basename(self.archive_file).replace('.pkl', '_backup_')
+                old_baks = sorted([
+                    f for f in os.listdir(bak_dir)
+                    if f.startswith(base_name) and f.endswith('.pkl')
+                ])
+                for old in old_baks[:-10]:
+                    try:
+                        os.remove(os.path.join(bak_dir, old))
+                    except:
+                        pass
+
+            # 2. 原子寫入：先寫到臨時檔，再 rename（防止寫到一半崩潰）
+            tmp_file = self.archive_file + '.tmp'
+            with open(tmp_file, 'wb') as f:
                 pickle.dump({
                     'individuals': self.archive,
                     'timestamp': datetime.now().isoformat(),
                 }, f)
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(tmp_file, self.archive_file)
+
         except Exception as e:
             print(f"⚠️ 歷史保存失敗: {e}")
+            # 如果原子寫入失敗，嘗試從備份恢復
+            bak_file = self.archive_file + '.bak'
+            if os.path.exists(bak_file) and not os.path.exists(self.archive_file):
+                import shutil
+                shutil.copy2(bak_file, self.archive_file)
+                print(f"🛡️ 已從備份恢復: {bak_file}")
 
     def inject_elites(self, population: List, ratio: float = 0.3):
         """注入精英"""
@@ -1274,12 +1309,17 @@ class IslandMigrationManager:
             for ind in sorted_pop[:n]
         ]
         try:
-            with open(self._outbox_file(self.window_id), 'wb') as f:
+            outbox = self._outbox_file(self.window_id)
+            tmp_file = outbox + '.tmp'
+            with open(tmp_file, 'wb') as f:
                 pickle.dump({
                     'migrants': migrants,
                     'source_window': self.window_id,
                     'timestamp': datetime.now().isoformat(),
                 }, f)
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(tmp_file, outbox)
         except Exception as e:
             print(f"   ⚠️ 遷移匯出失敗: {e}")
 
