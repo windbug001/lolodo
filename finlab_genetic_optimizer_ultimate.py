@@ -1214,6 +1214,7 @@ class ParetoArchiveManager:
         # 記住更新前的 archive（用於比對）
         old_archive = list(self.archive)
         old_best = self._get_archive_best_sharpe_score(old_archive)
+        had_archive = len(old_archive) > 0  # 是否有舊資料
 
         # 合併新舊個體
         all_individuals = self.archive + [
@@ -1231,17 +1232,17 @@ class ParetoArchiveManager:
         # 🛡️ 基線守衛：確認更新後沒有退化
         new_best = self._get_archive_best_sharpe_score(candidate_archive)
 
-        if new_best < old_best * 0.95 and old_best > 0:
-            # 新 archive 明顯退化（>5%），拒絕更新
-            print(f"🚨🛡️ 基線守衛觸發！")
+        # 第 1 層：與上次 archive 比較（只在有舊 archive 時生效）
+        if had_archive and old_best > 0 and new_best < old_best * 0.95:
+            print(f"🚨🛡️ 退化守衛觸發！")
             print(f"   舊最佳 sharpe_score: {old_best:.4f}")
             print(f"   新最佳 sharpe_score: {new_best:.4f} (退化 {(1-new_best/old_best)*100:.1f}%)")
             print(f"   ❌ 拒絕更新 archive，保留舊版本")
-            # 不更新 self.archive，不呼叫 _save()
             return
 
-        if _BASELINE_SHARPE_SCORE > 0 and new_best < _BASELINE_SHARPE_SCORE * 0.90:
-            # 低於硬編碼基線的 90%，發出強烈警告
+        # 第 2 層：與硬編碼基線比較（只在有舊 archive 時生效）
+        # ⚠️ 首次執行（had_archive=False）時不檢查，否則永遠存不了檔
+        if had_archive and _BASELINE_SHARPE_SCORE > 0 and new_best < _BASELINE_SHARPE_SCORE * 0.90:
             baseline_sharpe = _BASELINE['sharpe'] if _BASELINE else '?'
             print(f"🚨🛡️ 硬編碼基線守衛觸發！")
             print(f"   W{WINDOW_ID} 已知最佳 Sharpe: {baseline_sharpe}")
@@ -1254,10 +1255,12 @@ class ParetoArchiveManager:
         self._save()
 
         # 輸出守衛日誌
-        if _BASELINE:
+        if _BASELINE and had_archive:
             print(f"   🛡️ 基線校驗通過：best_score={new_best:.4f} "
                   f">= baseline={_BASELINE_SHARPE_SCORE:.4f} "
                   f"(W{WINDOW_ID} {_BASELINE['name']})")
+        elif not had_archive:
+            print(f"   📝 首次存檔：best_score={new_best:.4f} (無舊 archive，跳過基線檢查)")
 
     def _deduplicate(self, individuals: List[Dict]) -> List[Dict]:
         """去重"""
