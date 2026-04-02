@@ -71,11 +71,67 @@ MIN_CAPACITY = 10_000_000  # 1000萬
 TARGET_ANNUAL_RETURN = 0.3
 MAX_DRAWDOWN = 0.2
 
-# GA 演化參數
-POPULATION_SIZE = 50  # 較小的族群，因為 FinLab 回測較慢
+# === 🐉 Dragon 島嶼個性化演化參數 ===
+# 每座島可以有不同的突變率、交叉率、族群大小、eta
+# 格式: WINDOW_ID -> {param: value}
+DRAGON_ISLAND_PROFILES = {
+    # 🐉 W24 Dragon-Anchor: 停滯3代，需要震盪 reheat
+    24: {'POPULATION_SIZE': 50, 'MUTATION_RATE': 0.35, 'CROSSOVER_RATE': 0.8,
+         'SBX_ETA': 20.0, 'PM_ETA': 20.0, 'NOTE': 'reheat-震盪脫離高原'},
+    # 🐲 W25 Dragon-Explorer: 停滯4代，高探索
+    25: {'POPULATION_SIZE': 50, 'MUTATION_RATE': 0.35, 'CROSSOVER_RATE': 0.8,
+         'SBX_ETA': 15.0, 'PM_ETA': 15.0, 'NOTE': 'reheat-高探索'},
+    # 💎 W26 Dragon-Refiner: 領跑者，精細搜索
+    26: {'POPULATION_SIZE': 60, 'MUTATION_RATE': 0.15, 'CROSSOVER_RATE': 0.85,
+         'SBX_ETA': 30.0, 'PM_ETA': 30.0, 'NOTE': '精搜-低突變高eta'},
+    # 🎯 W27 Dragon-Sharpe: 停滯3代，需要震盪
+    27: {'POPULATION_SIZE': 50, 'MUTATION_RATE': 0.35, 'CROSSOVER_RATE': 0.8,
+         'SBX_ETA': 20.0, 'PM_ETA': 20.0, 'NOTE': 'reheat-震盪脫離高原'},
+    # ⚡ W28 Dragon-Blitz: MDD最低，穩定進化
+    28: {'POPULATION_SIZE': 55, 'MUTATION_RATE': 0.18, 'CROSSOVER_RATE': 0.85,
+         'SBX_ETA': 25.0, 'PM_ETA': 25.0, 'NOTE': '穩定精搜'},
+    # 🐲 W29 Dragon-Hydra: 嚴重落後，精英播種+高突變探索
+    29: {'POPULATION_SIZE': 60, 'MUTATION_RATE': 0.40, 'CROSSOVER_RATE': 0.7,
+         'SBX_ETA': 10.0, 'PM_ETA': 10.0, 'NOTE': '回收重啟-精英播種+高探索',
+         'ELITE_SEED_FROM': [26, 28]},
+    # 🐘 W30 Dragon-LargeCap: Fit很低，需要刺激
+    30: {'POPULATION_SIZE': 55, 'MUTATION_RATE': 0.30, 'CROSSOVER_RATE': 0.8,
+         'SBX_ETA': 15.0, 'PM_ETA': 15.0, 'NOTE': 'reheat-提升Fit'},
+    # 🦎 W31 Hydra-LgCap: 停滯51代，完全卡死，精英播種重啟
+    31: {'POPULATION_SIZE': 60, 'MUTATION_RATE': 0.40, 'CROSSOVER_RATE': 0.7,
+         'SBX_ETA': 10.0, 'PM_ETA': 10.0, 'NOTE': '回收重啟-精英播種+高探索',
+         'ELITE_SEED_FROM': [26, 28]},
+}
+
+# 讀取當前島的 profile（無匹配則用預設值）
+_profile = DRAGON_ISLAND_PROFILES.get(WINDOW_ID, {})
+
+# GA 演化參數（依島嶼 profile 覆蓋）
+POPULATION_SIZE = _profile.get('POPULATION_SIZE', 50)
 N_GENERATIONS = 100
-MUTATION_RATE = 0.2
-CROSSOVER_RATE = 0.8
+MUTATION_RATE = _profile.get('MUTATION_RATE', 0.2)
+CROSSOVER_RATE = _profile.get('CROSSOVER_RATE', 0.8)
+SBX_ETA = _profile.get('SBX_ETA', 20.0)   # SBX 交叉分布指數
+PM_ETA = _profile.get('PM_ETA', 20.0)      # 多項式突變分布指數
+ELITE_SEED_FROM = _profile.get('ELITE_SEED_FROM', [])  # 精英播種來源島
+
+# === 🔀 島間遷移設定 ===
+MIGRATION_ENABLED = True          # 開啟島間遷移
+MIGRATION_INTERVAL = 12           # 每 12 代遷移一次
+MIGRATION_SIZE = 3                # 每次遷移 3 個精英
+MIGRATION_TOPOLOGY = {
+    # 遷移拓撲: source -> [targets]
+    # W26 (領跑) 的精英散播給次梯隊
+    26: [24, 27, 28],
+    # W28 (低MDD) 的基因注入 W26 增加穩健性
+    28: [26, 30],
+    # 次梯隊之間互相交流
+    24: [25, 27],
+    27: [24, 30],
+    25: [24],
+    30: [31],
+    31: [30],
+}
 
 # Walk-Forward 設定
 WALK_FORWARD_WINDOWS = 3  # 3 個時間窗口
@@ -87,8 +143,16 @@ BACKTEST_START = '2017-01-01'
 BACKTEST_END = None
 
 print(f"=" * 80)
-print(f"🚀 FinLab 台股基因演算法優化系統 v1.0 - 視窗 {WINDOW_ID}")
+print(f"🚀 FinLab 台股基因演算法優化系統 v1.1 - 視窗 {WINDOW_ID}")
 print(f"   🎯 目標：夏普 >= {TARGET_SHARPE}, 胃納量 >= {MIN_CAPACITY/1e7:.0f}00萬")
+if _profile:
+    print(f"   🐉 島嶼策略: {_profile.get('NOTE', 'N/A')}")
+    print(f"   ⚙️  突變={MUTATION_RATE}, 交叉={CROSSOVER_RATE}, "
+          f"SBX_η={SBX_ETA}, PM_η={PM_ETA}, 族群={POPULATION_SIZE}")
+    if ELITE_SEED_FROM:
+        print(f"   🌱 精英播種來源: W{ELITE_SEED_FROM}")
+if MIGRATION_ENABLED:
+    print(f"   🔀 島間遷移: 每{MIGRATION_INTERVAL}代 × {MIGRATION_SIZE}精英")
 print(f"=" * 80)
 
 # =============================================================================
@@ -764,11 +828,11 @@ class GeneDecoder:
         params['weight_si'] = raw_weights[1] / total
         params['weight_rpt'] = raw_weights[2] / total
 
-        # === 回測參數（4個）===
-        params['stop_loss'] = genes[28] * 0.2 + 0.15  # 15%-35%
-        params['trail_stop'] = genes[29] * 0.3 + 0.2  # 20%-50%
-        params['take_profit'] = genes[30] * 0.5 + 0.5  # 50%-100%
-        params['position_limit'] = genes[31] * 0.2 + 0.25  # 25%-45%
+        # === 回測參數（4個）=== [P1: 擴展搜索空間]
+        params['stop_loss'] = genes[28] * 0.2 + 0.15      # 15%-35%（不變）
+        params['trail_stop'] = genes[29] * 0.30 + 0.15    # 15%-45%（下界 20%→15%）
+        params['take_profit'] = genes[30] * 0.70 + 0.50   # 50%-120%（上界 100%→120%）
+        params['position_limit'] = genes[31] * 0.25 + 0.25  # 25%-50%（上界 45%→50%）
 
         return params
 
@@ -1019,9 +1083,9 @@ toolbox.register("individual", tools.initRepeat, creator.Individual,
 toolbox.register("population", tools.initRepeat, list, toolbox.individual)
 toolbox.register("evaluate", evaluate_fitness)
 toolbox.register("mate", tools.cxSimulatedBinaryBounded,
-                 low=0.0, up=1.0, eta=20.0)
+                 low=0.0, up=1.0, eta=SBX_ETA)
 toolbox.register("mutate", tools.mutPolynomialBounded,
-                 low=0.0, up=1.0, eta=20.0, indpb=0.05)
+                 low=0.0, up=1.0, eta=PM_ETA, indpb=0.05)
 toolbox.register("select", tools.selNSGA2)
 
 print("✅ DEAP NSGA-II 配置完成")
@@ -1164,6 +1228,113 @@ class ProgressLogger:
             json.dump(history, f, indent=2, ensure_ascii=False)
 
 
+class IslandMigrationManager:
+    """🔀 島間遷移管理器 — 負責跨島基因交流"""
+
+    def __init__(self, window_id: int, base_dir: str = BASE_DIR):
+        self.window_id = window_id
+        self.base_dir = base_dir
+        self.migration_dir = f"{base_dir}/shared_migration"
+        Path(self.migration_dir).mkdir(parents=True, exist_ok=True)
+        self.migration_count = 0
+
+    def _outbox_file(self, src_id: int) -> str:
+        return f"{self.migration_dir}/migrants_from_w{src_id}.pkl"
+
+    def export_elites(self, population: List, n: int = MIGRATION_SIZE):
+        """匯出本島最佳個體到共享目錄供其他島讀取"""
+        sorted_pop = sorted(population,
+                            key=lambda ind: sum(ind.fitness.values) if ind.fitness.valid else -999,
+                            reverse=True)
+        migrants = [
+            {'genes': list(ind), 'fitness': ind.fitness.values}
+            for ind in sorted_pop[:n]
+        ]
+        try:
+            with open(self._outbox_file(self.window_id), 'wb') as f:
+                pickle.dump({
+                    'migrants': migrants,
+                    'source_window': self.window_id,
+                    'timestamp': datetime.now().isoformat(),
+                }, f)
+        except Exception as e:
+            print(f"   ⚠️ 遷移匯出失敗: {e}")
+
+    def import_elites(self, population: List) -> List:
+        """從遷移拓撲中的來源島匯入精英"""
+        # 找出誰會遷移到本島
+        source_islands = [src for src, targets in MIGRATION_TOPOLOGY.items()
+                          if self.window_id in targets]
+        if not source_islands:
+            return population
+
+        imported = []
+        for src_id in source_islands:
+            outbox = self._outbox_file(src_id)
+            if not os.path.exists(outbox):
+                continue
+            try:
+                with open(outbox, 'rb') as f:
+                    data_pkg = pickle.load(f)
+                migrants = data_pkg.get('migrants', [])
+                imported.extend(migrants)
+            except Exception as e:
+                print(f"   ⚠️ 讀取 W{src_id} 遷移資料失敗: {e}")
+
+        if not imported:
+            return population
+
+        # 用移民替換族群中最差的個體
+        n_replace = min(len(imported), max(1, len(population) // 10))
+        population.sort(key=lambda ind: sum(ind.fitness.values) if ind.fitness.valid else -999)
+
+        for i, migrant in enumerate(imported[:n_replace]):
+            population[i][:] = migrant['genes']
+            if hasattr(population[i], 'fitness'):
+                del population[i].fitness.values
+
+        self.migration_count += n_replace
+        print(f"   🔀 遷移：從 {[f'W{s}' for s in source_islands]} 匯入 {n_replace} 個精英"
+              f" (累計 {self.migration_count})")
+
+        return population
+
+    def seed_from_other_islands(self, population: List) -> List:
+        """🌱 精英播種：用指定島嶼的 Pareto 精英初始化本島族群（用於 W29/W31 回收）"""
+        if not ELITE_SEED_FROM:
+            return population
+
+        seed_individuals = []
+        for src_id in ELITE_SEED_FROM:
+            pareto_file = f"{self.base_dir}/shared_pareto/pareto_archive_w{src_id}.pkl"
+            if not os.path.exists(pareto_file):
+                print(f"   ⚠️ 無法讀取 W{src_id} Pareto 存檔: {pareto_file}")
+                continue
+            try:
+                with open(pareto_file, 'rb') as f:
+                    archive_data = pickle.load(f)
+                elites = archive_data.get('individuals', [])
+                seed_individuals.extend(elites)
+                print(f"   🌱 從 W{src_id} 讀取 {len(elites)} 個精英用於播種")
+            except Exception as e:
+                print(f"   ⚠️ 讀取 W{src_id} Pareto 失敗: {e}")
+
+        if not seed_individuals:
+            return population
+
+        # 用精英播種替換族群的 50%（保留 50% 隨機個體維持多樣性）
+        n_seed = min(len(seed_individuals), len(population) // 2)
+        seed_individuals.sort(key=lambda x: sum(x['fitness']), reverse=True)
+
+        for i, elite in enumerate(seed_individuals[:n_seed]):
+            population[i][:] = elite['genes']
+            if hasattr(population[i], 'fitness'):
+                del population[i].fitness.values
+
+        print(f"   🌱 精英播種完成：注入 {n_seed} 個精英 (來自 W{ELITE_SEED_FROM})")
+        return population
+
+
 class EvolutionEngine:
     """演化引擎"""
 
@@ -1171,17 +1342,29 @@ class EvolutionEngine:
         self.toolbox = toolbox
         self.pareto_mgr = pareto_mgr
         self.history = []
-        self.logger = ProgressLogger(WINDOW_ID)  # 🔥 初始化進度日誌記錄器
+        self.logger = ProgressLogger(WINDOW_ID)
+        self.migration_mgr = IslandMigrationManager(WINDOW_ID) if MIGRATION_ENABLED else None
 
     def run(self, n_generations: int = N_GENERATIONS) -> Tuple[List, List]:
         """執行演化"""
+        profile_note = _profile.get('NOTE', '預設')
         print(f"\n{'='*70}")
-        print(f"🚀 開始演化")
+        print(f"🚀 開始演化 — W{WINDOW_ID} [{profile_note}]")
         print(f"   族群: {POPULATION_SIZE}, 世代: {n_generations}")
+        print(f"   突變率: {MUTATION_RATE}, 交叉率: {CROSSOVER_RATE}")
+        print(f"   SBX_eta: {SBX_ETA}, PM_eta: {PM_ETA}")
+        if ELITE_SEED_FROM:
+            print(f"   🌱 精英播種來源: W{ELITE_SEED_FROM}")
+        if MIGRATION_ENABLED:
+            print(f"   🔀 遷移: 每{MIGRATION_INTERVAL}代, {MIGRATION_SIZE}個精英")
         print(f"{'='*70}\n")
 
         # 初始化族群
         population = self.toolbox.population(n=POPULATION_SIZE)
+
+        # 🌱 精英播種（用於 W29/W31 回收重啟）
+        if self.migration_mgr and ELITE_SEED_FROM:
+            population = self.migration_mgr.seed_from_other_islands(population)
 
         # 注入歷史精英
         population = self.pareto_mgr.inject_elites(population, ratio=0.3)
@@ -1192,6 +1375,14 @@ class EvolutionEngine:
         # 演化循環
         for gen in range(n_generations):
             start_time = time.time()
+
+            # 🔀 島間遷移（每 MIGRATION_INTERVAL 代）
+            if (self.migration_mgr and MIGRATION_ENABLED
+                    and gen > 0 and gen % MIGRATION_INTERVAL == 0):
+                # 先匯出本島精英
+                self.migration_mgr.export_elites(population)
+                # 再匯入其他島精英
+                population = self.migration_mgr.import_elites(population)
 
             # 選擇
             offspring = self.toolbox.select(population, len(population))
@@ -1224,12 +1415,17 @@ class EvolutionEngine:
 
             # 輸出
             if (gen + 1) % 5 == 0 or gen == 0:
+                mig_info = f" | 遷移:{self.migration_mgr.migration_count}" if self.migration_mgr else ""
                 print(f"=== 第 {gen+1}/{n_generations} 代 ===")
                 print(f"   最佳綜合: {stats['best_composite']:.4f}")
                 print(f"   最佳夏普: {stats['best_sharpe']:.2f}")
                 print(f"   最佳胃納量: {stats['best_capacity']:.0f} 萬")
                 print(f"   穩健性: {stats['best_robustness']:.2f}")
-                print(f"   耗時: {elapsed:.1f}s")
+                print(f"   耗時: {elapsed:.1f}s{mig_info}")
+
+        # 最終遷移匯出（讓其他島下一輪能讀到）
+        if self.migration_mgr and MIGRATION_ENABLED:
+            self.migration_mgr.export_elites(population)
 
         # Pareto 前緣
         pareto_front = tools.sortNondominated(population, len(population), first_front_only=True)[0]
