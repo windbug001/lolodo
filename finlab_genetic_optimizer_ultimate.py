@@ -75,31 +75,31 @@ MAX_DRAWDOWN = 0.2
 # 每座島可以有不同的突變率、交叉率、族群大小、eta
 # 格式: WINDOW_ID -> {param: value}
 DRAGON_ISLAND_PROFILES = {
-    # 🐉 W24 Dragon-Anchor: 停滯3代，需要震盪 reheat
-    24: {'POPULATION_SIZE': 50, 'MUTATION_RATE': 0.35, 'CROSSOVER_RATE': 0.8,
-         'SBX_ETA': 20.0, 'PM_ETA': 20.0, 'NOTE': 'reheat-震盪脫離高原'},
-    # 🐲 W25 Dragon-Explorer: 停滯4代，高探索
-    25: {'POPULATION_SIZE': 50, 'MUTATION_RATE': 0.35, 'CROSSOVER_RATE': 0.8,
-         'SBX_ETA': 15.0, 'PM_ETA': 15.0, 'NOTE': 'reheat-高探索'},
+    # 🐉 W24 Dragon-Anchor: 停滯3代，中度震盪 + 略大族群吸收遷移基因
+    24: {'POPULATION_SIZE': 55, 'MUTATION_RATE': 0.30, 'CROSSOVER_RATE': 0.80,
+         'SBX_ETA': 20.0, 'PM_ETA': 20.0, 'NOTE': 'reheat-中度震盪+遷移吸收'},
+    # 🐲 W25 Dragon-Explorer: 停滯4代，廣域探索（低eta大步搜索）
+    25: {'POPULATION_SIZE': 50, 'MUTATION_RATE': 0.35, 'CROSSOVER_RATE': 0.75,
+         'SBX_ETA': 10.0, 'PM_ETA': 10.0, 'NOTE': 'explorer-廣域低eta探索'},
     # 💎 W26 Dragon-Refiner: 領跑者，精細搜索
     26: {'POPULATION_SIZE': 60, 'MUTATION_RATE': 0.15, 'CROSSOVER_RATE': 0.85,
          'SBX_ETA': 30.0, 'PM_ETA': 30.0, 'NOTE': '精搜-低突變高eta'},
-    # 🎯 W27 Dragon-Sharpe: 停滯3代，需要震盪
-    27: {'POPULATION_SIZE': 50, 'MUTATION_RATE': 0.35, 'CROSSOVER_RATE': 0.8,
-         'SBX_ETA': 20.0, 'PM_ETA': 20.0, 'NOTE': 'reheat-震盪脫離高原'},
+    # 🎯 W27 Dragon-Sharpe: 停滯3代，高突變+中eta（與W24區分）
+    27: {'POPULATION_SIZE': 50, 'MUTATION_RATE': 0.38, 'CROSSOVER_RATE': 0.85,
+         'SBX_ETA': 15.0, 'PM_ETA': 15.0, 'NOTE': 'reheat-高突變高交叉'},
     # ⚡ W28 Dragon-Blitz: MDD最低，穩定進化
     28: {'POPULATION_SIZE': 55, 'MUTATION_RATE': 0.18, 'CROSSOVER_RATE': 0.85,
          'SBX_ETA': 25.0, 'PM_ETA': 25.0, 'NOTE': '穩定精搜'},
-    # 🐲 W29 Dragon-Hydra: 嚴重落後，精英播種+高突變探索
-    29: {'POPULATION_SIZE': 60, 'MUTATION_RATE': 0.40, 'CROSSOVER_RATE': 0.7,
-         'SBX_ETA': 10.0, 'PM_ETA': 10.0, 'NOTE': '回收重啟-精英播種+高探索',
+    # 🐲 W29 Dragon-Hydra: 嚴重落後，精英播種 + 超高突變探索
+    29: {'POPULATION_SIZE': 60, 'MUTATION_RATE': 0.45, 'CROSSOVER_RATE': 0.70,
+         'SBX_ETA': 8.0, 'PM_ETA': 8.0, 'NOTE': '回收重啟-超廣域探索',
          'ELITE_SEED_FROM': [26, 28]},
-    # 🐘 W30 Dragon-LargeCap: Fit很低，需要刺激
-    30: {'POPULATION_SIZE': 55, 'MUTATION_RATE': 0.30, 'CROSSOVER_RATE': 0.8,
+    # 🐘 W30 Dragon-LargeCap: Fit很低，中高突變
+    30: {'POPULATION_SIZE': 55, 'MUTATION_RATE': 0.30, 'CROSSOVER_RATE': 0.80,
          'SBX_ETA': 15.0, 'PM_ETA': 15.0, 'NOTE': 'reheat-提升Fit'},
-    # 🦎 W31 Hydra-LgCap: 停滯51代，完全卡死，精英播種重啟
-    31: {'POPULATION_SIZE': 60, 'MUTATION_RATE': 0.40, 'CROSSOVER_RATE': 0.7,
-         'SBX_ETA': 10.0, 'PM_ETA': 10.0, 'NOTE': '回收重啟-精英播種+高探索',
+    # 🦎 W31 Hydra-LgCap: 停滯51代，精英播種 + 高突變但略保守（與W29區分）
+    31: {'POPULATION_SIZE': 55, 'MUTATION_RATE': 0.35, 'CROSSOVER_RATE': 0.75,
+         'SBX_ETA': 12.0, 'PM_ETA': 12.0, 'NOTE': '回收重啟-中廣域探索',
          'ELITE_SEED_FROM': [26, 28]},
 }
 
@@ -121,16 +121,21 @@ MIGRATION_INTERVAL = 12           # 每 12 代遷移一次
 MIGRATION_SIZE = 3                # 每次遷移 3 個精英
 MIGRATION_TOPOLOGY = {
     # 遷移拓撲: source -> [targets]
-    # W26 (領跑) 的精英散播給次梯隊
-    26: [24, 27, 28],
-    # W28 (低MDD) 的基因注入 W26 增加穩健性
-    28: [26, 30],
-    # 次梯隊之間互相交流
-    24: [25, 27],
-    27: [24, 30],
-    25: [24],
+    # W26 (領跑) 的精英向下散播
+    26: [24, 27, 28, 29],
+    # W28 (低MDD) 的穩健基因注入 W26 和下游
+    28: [26, 30, 31],
+    # W24 (次梯隊A) 互通 W25
+    24: [25],
+    # W27 (次梯隊B) 互通 W30
+    27: [30],
+    # W25 (Explorer) 廣域探索成果回饋 W24, W27
+    25: [24, 27],
+    # W30/W31 互通
     30: [31],
     31: [30],
+    # W29 回收後的新發現回饋 W25 (同為高探索島)
+    29: [25],
 }
 
 # Walk-Forward 設定
@@ -829,10 +834,28 @@ class GeneDecoder:
         params['weight_rpt'] = raw_weights[2] / total
 
         # === 回測參數（4個）=== [P1: 擴展搜索空間]
-        params['stop_loss'] = genes[28] * 0.2 + 0.15      # 15%-35%（不變）
-        params['trail_stop'] = genes[29] * 0.30 + 0.15    # 15%-45%（下界 20%→15%）
-        params['take_profit'] = genes[30] * 0.70 + 0.50   # 50%-120%（上界 100%→120%）
-        params['position_limit'] = genes[31] * 0.25 + 0.25  # 25%-50%（上界 45%→50%）
+        # ⚠️ 關鍵設計：gene 0~0.8 保持與舊版完全一致的映射，
+        # gene 0.8~1.0 才擴展到新上界。這樣現有精英的基因值（通常在 0.2~0.8）
+        # 解碼結果完全不變，保護 W26 的 Sharpe 3.842。
+        params['stop_loss'] = genes[28] * 0.2 + 0.15  # 15%-35%（不變）
+
+        g29 = genes[29]
+        if g29 <= 0.8:
+            params['trail_stop'] = g29 * 0.3 + 0.2        # 20%-44%（與舊版一致）
+        else:
+            params['trail_stop'] = 0.44 + (g29 - 0.8) * 0.3  # 44%-50%（擴展區）
+
+        g30 = genes[30]
+        if g30 <= 0.8:
+            params['take_profit'] = g30 * 0.5 + 0.5       # 50%-90%（與舊版一致）
+        else:
+            params['take_profit'] = 0.9 + (g30 - 0.8) * 1.5  # 90%-120%（擴展區）
+
+        g31 = genes[31]
+        if g31 <= 0.8:
+            params['position_limit'] = g31 * 0.2 + 0.25   # 25%-41%（與舊版一致）
+        else:
+            params['position_limit'] = 0.41 + (g31 - 0.8) * 0.45  # 41%-50%（擴展區）
 
         return params
 
