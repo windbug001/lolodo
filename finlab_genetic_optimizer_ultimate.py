@@ -71,6 +71,44 @@ MIN_CAPACITY = 10_000_000  # 1000萬
 TARGET_ANNUAL_RETURN = 0.3
 MAX_DRAWDOWN = 0.2
 
+# =============================================================================
+# 🛡️ 已知最佳基線值 — 硬編碼在代碼中，絕對不可丟失
+# =============================================================================
+# 來源：2026-04-02 Dragon 營收換股儀表板
+# 用途：
+#   1. Pareto 存檔守衛：如果新 archive 的最佳 Sharpe 低於基線，拒絕覆蓋
+#   2. 精英保護：基線以上的個體在 update() 中永不被丟棄
+#   3. 災難恢復：pkl 損壞時，至少知道每座島的歷史最佳水準
+#
+# ⚠️ 修改此表前請三思 — 這是最後一道防線
+# =============================================================================
+KNOWN_BEST_BASELINES = {
+    24: {'name': 'Dragon-Anchor',   'sharpe': 3.700, 'cagr': 1.282,
+         'mdd': 0.207, 'capacity_wan': 532, 'fit': 3.317, 'gen': 114},
+    25: {'name': 'Dragon-Explorer', 'sharpe': 3.560, 'cagr': 1.284,
+         'mdd': 0.216, 'capacity_wan': 414, 'fit': 3.023, 'gen': 71},
+    26: {'name': 'Dragon-Refiner',  'sharpe': 3.842, 'cagr': 1.380,
+         'mdd': 0.227, 'capacity_wan': 423, 'fit': 3.478, 'gen': 115},
+    27: {'name': 'Dragon-Sharpe',   'sharpe': 3.699, 'cagr': 1.296,
+         'mdd': 0.235, 'capacity_wan': 586, 'fit': 3.436, 'gen': 114},
+    28: {'name': 'Dragon-Blitz',    'sharpe': 3.743, 'cagr': 1.254,
+         'mdd': 0.201, 'capacity_wan': 566, 'fit': 3.300, 'gen': 116},
+    29: {'name': 'Dragon-Hydra',    'sharpe': 2.663, 'cagr': 0.298,
+         'mdd': 0.111, 'capacity_wan': 106, 'fit': 1.701, 'gen': 32},
+    30: {'name': 'Dragon-LargeCap', 'sharpe': 3.643, 'cagr': 1.250,
+         'mdd': 0.255, 'capacity_wan': 516, 'fit': 1.111, 'gen': 104},
+    31: {'name': 'Hydra-LgCap',     'sharpe': 3.656, 'cagr': 1.267,
+         'mdd': 0.233, 'capacity_wan': 568, 'fit': 3.058, 'gen': 51},
+}
+
+def _sharpe_to_fitness_score(sharpe: float) -> float:
+    """將 Sharpe 值轉換為 fitness score（與 evaluate_fitness 一致）"""
+    return min(5.0, max(0, sharpe / TARGET_SHARPE * 5.0))
+
+# 當前島的基線（用於快速查詢）
+_BASELINE = KNOWN_BEST_BASELINES.get(WINDOW_ID)
+_BASELINE_SHARPE_SCORE = _sharpe_to_fitness_score(_BASELINE['sharpe']) if _BASELINE else 0.0
+
 # === 🐉 Dragon 島嶼個性化演化參數 ===
 # 每座島可以有不同的突變率、交叉率、族群大小、eta
 # 格式: WINDOW_ID -> {param: value}
@@ -1125,21 +1163,58 @@ class ParetoArchiveManager:
         self._load()
 
     def _load(self):
-        """載入歷史"""
+        """載入歷史（帶損壞偵測 + 自動備份恢復）"""
+        loaded = False
+
         if os.path.exists(self.archive_file):
             try:
                 with open(self.archive_file, 'rb') as f:
                     data = pickle.load(f)
                     self.archive = data.get('individuals', [])
+                loaded = True
                 print(f"✅ 載入 {len(self.archive)} 個歷史精英")
             except Exception as e:
-                print(f"⚠️ 歷史載入失敗: {e}")
-                self.archive = []
-        else:
+                print(f"⚠️ 主檔案載入失敗: {e}")
+                # 嘗試從 .bak 備份恢復
+                bak_file = self.archive_file + '.bak'
+                if os.path.exists(bak_file):
+                    try:
+                        with open(bak_file, 'rb') as f:
+                            data = pickle.load(f)
+                            self.archive = data.get('individuals', [])
+                        loaded = True
+                        print(f"🛡️ 從備份恢復 {len(self.archive)} 個精英: {bak_file}")
+                    except Exception as e2:
+                        print(f"⚠️ 備份也載入失敗: {e2}")
+
+        if not loaded:
+            self.archive = []
             print("ℹ️ 無歷史存檔，從頭開始")
 
+        # 🛡️ 載入後基線校驗
+        if self.archive and _BASELINE:
+            best_score = self._get_archive_best_sharpe_score(self.archive)
+            if best_score < _BASELINE_SHARPE_SCORE * 0.80:
+                print(f"🚨 警告：archive 的最佳 score ({best_score:.4f}) "
+                      f"遠低於基線 ({_BASELINE_SHARPE_SCORE:.4f})")
+                print(f"   W{WINDOW_ID} {_BASELINE['name']} 歷史最佳 Sharpe: {_BASELINE['sharpe']}")
+                print(f"   🔍 archive 可能已損壞，請檢查備份檔案")
+            else:
+                print(f"   🛡️ 基線校驗OK：score={best_score:.4f} "
+                      f">= 80%基線={_BASELINE_SHARPE_SCORE*0.80:.4f}")
+
+    def _get_archive_best_sharpe_score(self, archive: List[Dict]) -> float:
+        """取得 archive 中最佳的 sharpe_score（fitness[0]）"""
+        if not archive:
+            return 0.0
+        return max(ind['fitness'][0] for ind in archive)
+
     def update(self, pareto_front: List):
-        """更新 Pareto 前緣"""
+        """更新 Pareto 前緣（帶基線守衛）"""
+        # 記住更新前的 archive（用於比對）
+        old_archive = list(self.archive)
+        old_best = self._get_archive_best_sharpe_score(old_archive)
+
         # 合併新舊個體
         all_individuals = self.archive + [
             {'genes': list(ind), 'fitness': ind.fitness.values}
@@ -1151,10 +1226,38 @@ class ParetoArchiveManager:
 
         # 保留前 30 名
         unique.sort(key=lambda x: sum(x['fitness']), reverse=True)
-        self.archive = unique[:30]
+        candidate_archive = unique[:30]
 
-        # 保存
+        # 🛡️ 基線守衛：確認更新後沒有退化
+        new_best = self._get_archive_best_sharpe_score(candidate_archive)
+
+        if new_best < old_best * 0.95 and old_best > 0:
+            # 新 archive 明顯退化（>5%），拒絕更新
+            print(f"🚨🛡️ 基線守衛觸發！")
+            print(f"   舊最佳 sharpe_score: {old_best:.4f}")
+            print(f"   新最佳 sharpe_score: {new_best:.4f} (退化 {(1-new_best/old_best)*100:.1f}%)")
+            print(f"   ❌ 拒絕更新 archive，保留舊版本")
+            # 不更新 self.archive，不呼叫 _save()
+            return
+
+        if _BASELINE_SHARPE_SCORE > 0 and new_best < _BASELINE_SHARPE_SCORE * 0.90:
+            # 低於硬編碼基線的 90%，發出強烈警告
+            baseline_sharpe = _BASELINE['sharpe'] if _BASELINE else '?'
+            print(f"🚨🛡️ 硬編碼基線守衛觸發！")
+            print(f"   W{WINDOW_ID} 已知最佳 Sharpe: {baseline_sharpe}")
+            print(f"   硬編碼基線 score: {_BASELINE_SHARPE_SCORE:.4f}")
+            print(f"   當前 archive score: {new_best:.4f}")
+            print(f"   ❌ 嚴重退化，拒絕覆蓋 archive")
+            return
+
+        self.archive = candidate_archive
         self._save()
+
+        # 輸出守衛日誌
+        if _BASELINE:
+            print(f"   🛡️ 基線校驗通過：best_score={new_best:.4f} "
+                  f">= baseline={_BASELINE_SHARPE_SCORE:.4f} "
+                  f"(W{WINDOW_ID} {_BASELINE['name']})")
 
     def _deduplicate(self, individuals: List[Dict]) -> List[Dict]:
         """去重"""
