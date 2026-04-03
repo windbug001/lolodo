@@ -1290,7 +1290,7 @@ class ParetoArchiveManager:
                 ts_bak = self.archive_file.replace('.pkl', f'_backup_{ts}.pkl')
                 shutil.copy2(self.archive_file, ts_bak)
                 # 清理過舊的時間戳備份（只保留最近 10 份）
-                bak_dir = os.path.dirname(self.archive_file)
+                bak_dir = os.path.dirname(self.archive_file) or '.'
                 base_name = os.path.basename(self.archive_file).replace('.pkl', '_backup_')
                 old_baks = sorted([
                     f for f in os.listdir(bak_dir)
@@ -1534,9 +1534,11 @@ class EvolutionEngine:
         # 🌱 精英播種（用於 W29/W31 回收重啟）
         if self.migration_mgr and ELITE_SEED_FROM:
             population = self.migration_mgr.seed_from_other_islands(population)
-
-        # 注入歷史精英
-        population = self.pareto_mgr.inject_elites(population, ratio=0.3)
+            # ⚠️ 不執行 inject_elites — 避免用本島弱 archive 覆蓋播種的好基因
+            print(f"   ⏭️ 跳過 inject_elites（精英播種模式，本島 archive 較弱）")
+        else:
+            # 注入歷史精英（正常模式）
+            population = self.pareto_mgr.inject_elites(population, ratio=0.3)
 
         # 初始評估
         population = self._evaluate_population(population)
